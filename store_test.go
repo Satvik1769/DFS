@@ -23,7 +23,7 @@ func TestPathTransformFunc(t *testing.T) {
 
 func TestStoreDeleteKey(t *testing.T) {
 	opts := StoreOps{
-		PathTransforFunc: CASPathTransformFunc,
+		PathTransformFunc: CASPathTransformFunc,
 	}
 	s := NewStore(opts);
 	key := "test_key";
@@ -35,17 +35,22 @@ func TestStoreDeleteKey(t *testing.T) {
 		t.Errorf("Failed to delete key: %v", err)
 	}
 
+
 }
 
 func TestStore(t *testing.T) {
 	opts := StoreOps{
-		PathTransforFunc: CASPathTransformFunc,
+		PathTransformFunc: CASPathTransformFunc,
 	}
 	s := NewStore(opts);
 	key := "test_key";
 	data := []byte("This is a test data stream 2.");
 	if err := s.writeStream(key, bytes.NewReader(data)); err != nil {
 		t.Errorf("Failed to write stream: %v", err)
+	}
+
+	if ok  := s.Has(key); !ok {
+		t.Errorf("Key '%s' should exist after writing", key)
 	}
 	r, err := s.Read(key);
 	if err != nil {
@@ -58,5 +63,7 @@ func TestStore(t *testing.T) {
 	if(string(b) != string(data)) {
 		t.Errorf("Data mismatch: expected '%s', got '%s'", string(data), string(b))
 	}
+	s.Delete(key);
+
 }
 
