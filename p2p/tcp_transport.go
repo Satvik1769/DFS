@@ -96,7 +96,7 @@ func (p *TCPPeer) RemoteAddr() net.Addr {
 	return p.conn.RemoteAddr();
 }
 
-func (p *TCPPeer) send(b []byte) error {
+func (p *TCPPeer) Send(b []byte) error {
 	_, err := p.conn.Write(b)
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
