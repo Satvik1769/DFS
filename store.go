@@ -4,22 +4,22 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"os"
 	"strings"
 )
 
 
-type PathTransforFunc func(string) PathKey;
+type PathTransformFunc func(string) PathKey;
 const DefaultRoot = "store";
 
 type StoreOps struct {
 	// Root is the root directory for the store
 	Root string;
-	PathTransformFunc PathTransforFunc;
+	PathTransformFunc PathTransformFunc;
 }
 
 type Store struct {
@@ -118,15 +118,20 @@ func (s *Store) Delete(key string) error {
 	return os.RemoveAll(FirstPathNameWithRoot);
 }
 
-func (s *Store) Has(Key string) bool {
-	PathKey := s.PathTransformFunc(Key);
-	var fullPath = s.Root + "/" + PathKey.FullPathName();
-	_, err := os.Stat(fullPath);
-	if(err != nil && err == fs.ErrNotExist){
-		return false;
-	}
-	return  true;
+func (s *Store) Clear() error {
+	return os.RemoveAll(s.Root);
+}
 
+func (s *Store) Has(Key string) bool {
+	pathKey := s.PathTransformFunc(Key);
+	fullPathWithRoot := s.Root + "/" + pathKey.FullPathName();
+
+	_, err := os.Stat(fullPathWithRoot);
+	return !errors.Is(err, os.ErrNotExist);
+}
+
+func (s *Store) Write(key string, r io.Reader) error{
+	return s.writeStream(key, r);
 }
 
 func (s *Store) writeStream(key string, r io.Reader) error {
