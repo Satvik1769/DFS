@@ -76,12 +76,36 @@ func (t *TCPTransport) startAcceptLoop(){
 		}
 
 		fmt.Printf("TCP connection accepted from %+v \n", conn);
-		go t.handleConn(conn);
+		go t.handleConn(conn, false);
 	}
 }
 
+// Dial establishes a TCP connection to the specified address.
+func (t *TCPTransport) Dial(addr string) error {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to dial %s: %w", addr, err)
+	}
+	fmt.Printf("TCP connection established to %s \n", addr)
+	go t.handleConn(conn, true);
+	return  nil;
+}
 
-func (t *TCPTransport) handleConn(conn net.Conn){
+
+func (p *TCPPeer) RemoteAddr() net.Addr {
+	return p.conn.RemoteAddr();
+}
+
+func (p *TCPPeer) send(b []byte) error {
+	_, err := p.conn.Write(b)
+	if err != nil {
+		return fmt.Errorf("failed to send message: %w", err)
+	}
+	return nil;
+}
+
+
+func (t *TCPTransport) handleConn(conn net.Conn, outbound bool){
 	var err error;
 
 	   defer func() {
@@ -94,7 +118,7 @@ func (t *TCPTransport) handleConn(conn net.Conn){
         conn.Close()
     }()
 
-	peer := NewTCPPeer(conn, true);
+	peer := NewTCPPeer(conn, outbound);
 
 	if err = t.HandshakeFunc(peer); err != nil {
 		return;
