@@ -6,48 +6,45 @@ import (
 )
 
 func OnPeer(peer p2p.Peer) error {
-	peer.Close() // Close the peer connection immediately for this example
-	fmt.Println("logic to handle new peer connection");
-	return nil;
-		}
+	fmt.Println("logic to handle new peer connection")
+	return nil
+}
 
 func makeServer(listenAddr string, nodes ...string) *FileServer {
 
 	tcpTransport := p2p.NewTcpTransport(p2p.TCPTransportOps{
-			ListenAddr:    listenAddr,
-			HandshakeFunc: p2p.NOPHandTransport,
-			Decoder:       p2p.DefaultDecoder{},
-		});
+		ListenAddr:    listenAddr,
+		HandshakeFunc: p2p.NOPHandTransport,
+		Decoder:       p2p.DefaultDecoder{},
+	})
 	fileServerOpts := FileServerOpts{
-		StorageRoot: listenAddr +"_network",
+		StorageRoot:       listenAddr + "_network",
 		PathTransformFunc: CASPathTransformFunc,
-		Transport: tcpTransport,
-		BootstrapNodes: nodes,
+		Transport:         tcpTransport,
+		BootstrapNodes:    nodes,
 	}
-	s := newFileServer(fileServerOpts);
-	tcpTransport.OnPeer = s.OnPeer;
-	return s;
-
+	s := newFileServer(fileServerOpts)
+	tcpTransport.OnPeer = s.OnPeer
+	return s
 
 }
 
-func main(){
-	s1 := makeServer(":3000", "");
-	s2 := makeServer(":4000", ":3000");
+func main() {
+	s1 := makeServer(":3000", "")
+	s2 := makeServer(":4000", ":3000")
 
-	go func ()  {
-		s1.Start();
+	go func() {
+		s1.Start()
 	}()
-	s2.Start();
+	s2.Start()
 
 	// go func ()  {
 	// 	time.Sleep(time.Second * 3);
 	// 	s.Stop()
 	// }()
 
-	if err:= s1.Start(); err != nil {
+	if err := s1.Start(); err != nil {
 		fmt.Println("Error starting file server:", err)
 	}
-
 
 }

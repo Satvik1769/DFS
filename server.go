@@ -2,55 +2,55 @@ package main
 
 import (
 	"DFS/p2p"
+	"encoding/gob"
 	"fmt"
+	"io"
 	"log"
 	"sync"
 )
 
-
-
 type FileServerOpts struct {
-	StorageRoot string;
-	PathTransformFunc PathTransformFunc;
-	Transport p2p.Transport;
-	BootstrapNodes []string;
-	}
+	StorageRoot       string
+	PathTransformFunc PathTransformFunc
+	Transport         p2p.Transport
+	BootstrapNodes    []string
+}
 
 type FileServer struct {
-	Ops FileServerOpts;
-	peers map[string]p2p.Peer;
-	peerLock sync.Mutex; // to protect access to peers map
-	store *Store;
-	quitch chan struct{}; // channel to signal shutdown
+	Ops      FileServerOpts
+	peers    map[string]p2p.Peer
+	peerLock sync.Mutex // to protect access to peers map
+	store    *Store
+	quitch   chan struct{} // channel to signal shutdown
 }
 
 func newFileServer(ops FileServerOpts) *FileServer {
 	StoreOps := StoreOps{
-		Root: ops.StorageRoot,
+		Root:              ops.StorageRoot,
 		PathTransformFunc: ops.PathTransformFunc,
 	}
-	store := NewStore(StoreOps);
+	store := NewStore(StoreOps)
 	return &FileServer{
-		Ops: ops,
-		store: store,
-		quitch: make(chan struct{}),
-		peers: make(map[string]p2p.Peer),
+		Ops:      ops,
+		store:    store,
+		quitch:   make(chan struct{}),
+		peers:    make(map[string]p2p.Peer),
 		peerLock: sync.Mutex{},
 	}
 }
 
 func (s *FileServer) bootstrapNetwork() error {
 	for _, addr := range s.Ops.BootstrapNodes {
-		if(len(addr) == 0){
-			continue; 
+		if len(addr) == 0 {
+			continue
 		}
-		go func (addr string)  {
+		go func(addr string) {
 			if err := s.Ops.Transport.Dial(addr); err != nil {
-				log.Printf("Failed to connect to bootstrap node %s: %v", addr, err);
+				log.Printf("Failed to connect to bootstrap node %s: %v", addr, err)
 			}
 		}(addr)
 	}
-	return nil;
+	return nil
 }
 
 func (s *FileServer) OnPeer(p p2p.Peer) error {
@@ -58,37 +58,53 @@ func (s *FileServer) OnPeer(p p2p.Peer) error {
 	defer s.peerLock.Unlock()
 	s.peers[p.RemoteAddr().String()] = p
 	log.Printf("New peer connected: %s", p.RemoteAddr().String())
-	return  nil;
+	return nil
 
 }
 
+type Payload struct {
+	key  string
+	Data []byte
+}
+
+func (s *FileServer) broadcast(p Payload) error {
+	for _, peer := range s.peers {
+		if err := gob.NewEncoder(peer).Encode(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *FileServer) StoreData(key string, r io.Reader) error {
+	return nil
+}
 
 func (s *FileServer) Start() error {
 	if err := s.Ops.Transport.ListenAndAccept(); err != nil {
-		return err;
+		return err
 	}
 
-	if(len(s.Ops.BootstrapNodes) > 0){
+	if len(s.Ops.BootstrapNodes) > 0 {
 		s.bootstrapNetwork()
 	}
 
-	
-	s.loop(); 
+	s.loop()
 
-	return nil; 
+	return nil
 }
 
-func (s *FileServer) loop(){
-	defer func ()  {
-		log.Println("FileServer loop stopped due to user request or error.");
-		s.Ops.Transport.Close();
+func (s *FileServer) loop() {
+	defer func() {
+		log.Println("FileServer loop stopped due to user request or error.")
+		s.Ops.Transport.Close()
 	}()
-	for{
+	for {
 		select {
-			case msg := <-s.Ops.Transport.Consume():
-				fmt.Println("Received message:", msg) 
-			case <- s.quitch:
-				return
+		case msg := <-s.Ops.Transport.Consume():
+			fmt.Println("Received message:", msg)
+		case <-s.quitch:
+			return
 		}
 	}
 }
