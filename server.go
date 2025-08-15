@@ -77,13 +77,12 @@ func (s *FileServer) broadcast(p *Payload) error {
 	return gob.NewEncoder(mw).Encode(p)
 
 }
-
+  
 func (s *FileServer) StoreData(key string, r io.Reader) error {
-	if err := s.store.Write(key, r); err != nil {
-		return err
-	}
 	buf := new(bytes.Buffer)
-	if _, err := io.Copy(buf, r); err != nil {
+	tee := io.TeeReader(r, buf)
+
+	if err := s.store.Write(key, tee); err != nil {
 		return err
 	}
 
