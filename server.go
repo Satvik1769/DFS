@@ -63,34 +63,53 @@ func (s *FileServer) OnPeer(p p2p.Peer) error {
 
 }
 
-type Payload struct {
-	Key  string
-	Data []byte
+type Message struct {
+	From string
+	Payload any
 }
 
-func (s *FileServer) broadcast(p *Payload) error {
+func (s *FileServer) broadcast(msg *Message) error {
 	peers := []io.Writer{}
 	for _, peer := range s.peers {
 		peers = append(peers, peer)
 	}
 	mw := io.MultiWriter(peers...)
-	return gob.NewEncoder(mw).Encode(p)
+	return gob.NewEncoder(mw).Encode(msg)
 
 }
-  
-func (s *FileServer) StoreData(key string, r io.Reader) error {
-	buf := new(bytes.Buffer)
-	tee := io.TeeReader(r, buf)
 
-	if err := s.store.Write(key, tee); err != nil {
+func (s *FileServer) StoreData(key string, r io.Reader) error {
+	// buf := new(bytes.Buffer)
+	// tee := io.TeeReader(r, buf)
+
+	// if err := s.store.Write(key, tee); err != nil {
+	// 	return err
+	// }
+
+	// p := &DataMessage{
+	// 	Key:  key,
+	// 	Data: buf.Bytes(),
+	// }
+	// return s.broadcast(&Message{From: "satvik", Payload: p})
+
+	buf := new(bytes.Buffer)
+	msg := Message{
+		Payload: []byte("Hello, DFS!"),
+	}
+
+	if err := gob.NewEncoder(buf).Encode(&msg); err != nil {
+		log.Printf("Failed to encode message: %v", err)
 		return err
 	}
 
-	p := &Payload{
-		Key:  key,
-		Data: buf.Bytes(),
-	}
-	return s.broadcast(p)
+	for _, peer := range s.peers {
+		if err := peer.Send(buf.Bytes()); err != nil {
+			log.Printf("Failed to send message to peer %s: %v", peer.RemoteAddr().String(), err)
+			return err
+		}
+	} 
+
+	return nil;
 }
 
 func (s *FileServer)  Start() error {
@@ -108,6 +127,7 @@ func (s *FileServer)  Start() error {
 	return nil
 }
 
+
 func (s *FileServer) loop() {
 	defer func() {
 		log.Println("FileServer loop stopped due to user request or error.")
@@ -115,18 +135,30 @@ func (s *FileServer) loop() {
 	}()
 	for {
 		select {
-		case msg := <-s.Ops.Transport.Consume():
-			var p Payload;
-			if err:= gob.NewDecoder(bytes.NewReader(msg.Payload)).Decode(&p); err != nil {
+		case rpc := <-s.Ops.Transport.Consume():
+			var msg Message;
+			fmt.Printf("Received payload from %s: %v\n", msg.From, msg.Payload)
+			payloadBytes := rpc.Payload
+			if err := gob.NewDecoder(bytes.NewReader(payloadBytes)).Decode(&msg); err != nil {
 				log.Printf("Failed to decode message: %v", err)
-				continue
 			}
-			fmt.Printf("Received here : %+v \n", p)
+
+			fmt.Printf("Decoded message from %s: %s\n", msg.From, string(msg.Payload.([]byte))) 
+
+			// if err := s.handleMessage(&m); err != nil {
+			// 	log.Printf("Failed to handle message: %v", err)
+			// }
+
 		case <-s.quitch:
 			return
 		}
 	}
 }
+
+// func (s *FileServer) handleMessage(msg *Message) error {
+
+// 	return nil
+// }
 
 func (s *FileServer) Stop() {
 	close(s.quitch)
