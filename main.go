@@ -2,7 +2,9 @@ package main
 
 import (
 	"DFS/p2p"
+	"bytes"
 	"fmt"
+	"time"
 )
 
 func OnPeer(peer p2p.Peer) error {
@@ -35,16 +37,22 @@ func main() {
 
 	go func() {
 		s1.Start()
+
 	}()
-	s2.Start()
+
+
+	go func() {
+		s2.Start()
+	}()
+	
+	time.Sleep(1 * time.Second)
+	data := bytes.NewReader([]byte("Hello, DFS!"))
+	s2.StoreData("private", data)
 
 	// go func ()  {
 	// 	time.Sleep(time.Second * 3);
 	// 	s.Stop()
 	// }()
 
-	if err := s1.Start(); err != nil {
-		fmt.Println("Error starting file server:", err)
-	}
-
+	select {}
 }

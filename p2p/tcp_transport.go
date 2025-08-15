@@ -23,15 +23,13 @@ type TCPTransport struct {
 
 
 type TCPPeer struct {
-	conn net.Conn;
+	net.Conn;
 	// if we accept and retreive a function false
 	// if we send and retrieve a function true
 	outbound bool;
 }
 
-func (p *TCPPeer) Close() error {
-	return p.conn.Close();
-}
+
 
 func NewTcpTransport(opts TCPTransportOps) *TCPTransport{
 	return &TCPTransport{
@@ -41,7 +39,7 @@ func NewTcpTransport(opts TCPTransportOps) *TCPTransport{
 }
 
 func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer{
-	return &TCPPeer{conn: conn, outbound: outbound}
+	return &TCPPeer{Conn: conn, outbound: outbound}
 }
 
 func (t *TCPTransport) Close() error {
@@ -92,12 +90,10 @@ func (t *TCPTransport) Dial(addr string) error {
 }
 
 
-func (p *TCPPeer) RemoteAddr() net.Addr {
-	return p.conn.RemoteAddr();
-}
+
 
 func (p *TCPPeer) Send(b []byte) error {
-	_, err := p.conn.Write(b)
+	_, err := p.Conn.Write(b)
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
 	}

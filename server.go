@@ -2,6 +2,7 @@ package main
 
 import (
 	"DFS/p2p"
+	"bytes"
 	"encoding/gob"
 	"fmt"
 	"io"
@@ -63,24 +64,38 @@ func (s *FileServer) OnPeer(p p2p.Peer) error {
 }
 
 type Payload struct {
-	key  string
+	Key  string
 	Data []byte
 }
 
-func (s *FileServer) broadcast(p Payload) error {
+func (s *FileServer) broadcast(p *Payload) error {
+	peers := []io.Writer{}
 	for _, peer := range s.peers {
-		if err := gob.NewEncoder(peer).Encode(p); err != nil {
-			return err
-		}
+		peers = append(peers, peer)
 	}
-	return nil
+	mw := io.MultiWriter(peers...)
+	return gob.NewEncoder(mw).Encode(p)
+
 }
 
 func (s *FileServer) StoreData(key string, r io.Reader) error {
-	return nil
+	if err := s.store.Write(key, r); err != nil {
+		return err
+	}
+	buf := new(bytes.Buffer)
+	if _, err := io.Copy(buf, r); err != nil {
+		return err
+	}
+
+	p := &Payload{
+		Key:  key,
+		Data: buf.Bytes(),
+	}
+	return s.broadcast(p)
 }
 
-func (s *FileServer) Start() error {
+func (s *FileServer)  Start() error {
+
 	if err := s.Ops.Transport.ListenAndAccept(); err != nil {
 		return err
 	}
@@ -102,7 +117,12 @@ func (s *FileServer) loop() {
 	for {
 		select {
 		case msg := <-s.Ops.Transport.Consume():
-			fmt.Println("Received message:", msg)
+			var p Payload;
+			if err:= gob.NewDecoder(bytes.NewReader(msg.Payload)).Decode(&p); err != nil {
+				log.Printf("Failed to decode message: %v", err)
+				continue
+			}
+			fmt.Printf("Received here : %+v \n", p)
 		case <-s.quitch:
 			return
 		}
