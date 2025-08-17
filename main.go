@@ -2,8 +2,8 @@ package main
 
 import (
 	"DFS/p2p"
-	"bytes"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -46,13 +46,20 @@ func main() {
 	}()
 	
 	time.Sleep(1 * time.Second)
-	data := bytes.NewReader([]byte("Hello, DFS!"))
-	s2.StoreData("private", data)
+	
+	r, err := s2.Get("test_key");
+	if err != nil {
+		fmt.Printf("Failed to read from store: %v", err)
+		return
+	}
 
-	// go func ()  {
-	// 	time.Sleep(time.Second * 3);
-	// 	s.Stop()
-	// }()
+	b, err := io.ReadAll(r)
+	if err != nil {
+		fmt.Printf("Failed to read from io.Reader: %v", err)
+		return
+	}
+
+	fmt.Println(string(b))
 
 	select {}
 }
