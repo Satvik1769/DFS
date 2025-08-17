@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync"
 )
 
 type TCPTransportOps struct {
@@ -27,6 +28,7 @@ type TCPPeer struct {
 	// if we accept and retreive a function false
 	// if we send and retrieve a function true
 	outbound bool;
+	Wg *sync.WaitGroup;
 }
 
 
@@ -39,7 +41,7 @@ func NewTcpTransport(opts TCPTransportOps) *TCPTransport{
 }
 
 func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer{
-	return &TCPPeer{Conn: conn, outbound: outbound}
+	return &TCPPeer{Conn: conn, outbound: outbound, Wg: &sync.WaitGroup{}}
 }
 
 func (t *TCPTransport) Close() error {
@@ -133,8 +135,13 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool){
 		if  err != nil{
 			return;
 		}
-		msg.From = conn.RemoteAddr();
+		msg.From = conn.RemoteAddr().String();
+		peer.Wg.Add(1);
+		fmt.Printf("waiting to stream be done\n")
+
 		t.rpcch <- msg;
+		peer.Wg.Wait()
+		fmt.Printf("streaming done\n")
 		fmt.Printf("Received message: %v \n", msg);
 	}
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"sync"
+	"time"
 )
 
 type FileServerOpts struct {
@@ -64,8 +65,16 @@ func (s *FileServer) OnPeer(p p2p.Peer) error {
 }
 
 type Message struct {
-	From string
 	Payload any
+}
+
+type MessageStoreFile struct {
+	Key string 
+	Size int
+}
+
+func init() {
+    gob.Register(MessageStoreFile{})
 }
 
 func (s *FileServer) broadcast(msg *Message) error {
@@ -79,22 +88,12 @@ func (s *FileServer) broadcast(msg *Message) error {
 }
 
 func (s *FileServer) StoreData(key string, r io.Reader) error {
-	// buf := new(bytes.Buffer)
-	// tee := io.TeeReader(r, buf)
-
-	// if err := s.store.Write(key, tee); err != nil {
-	// 	return err
-	// }
-
-	// p := &DataMessage{
-	// 	Key:  key,
-	// 	Data: buf.Bytes(),
-	// }
-	// return s.broadcast(&Message{From: "satvik", Payload: p})
-
 	buf := new(bytes.Buffer)
 	msg := Message{
-		Payload: []byte("Hello, DFS!"),
+		Payload: MessageStoreFile{
+			Key: key,
+			Size: int(r.(*bytes.Reader).Len()),
+		},
 	}
 
 	if err := gob.NewEncoder(buf).Encode(&msg); err != nil {
@@ -107,6 +106,17 @@ func (s *FileServer) StoreData(key string, r io.Reader) error {
 			log.Printf("Failed to send message to peer %s: %v", peer.RemoteAddr().String(), err)
 			return err
 		}
+	} 
+
+	time.Sleep(4 * time.Second)
+ 
+	for _, peer := range s.peers {
+		n, err := io.Copy(peer, r);
+		if  err != nil {
+			log.Printf("Failed to send message to peer %s: %v", peer.RemoteAddr().String(), err)
+			return err
+		}
+		fmt.Printf("Received and Written %d bytes to peer %s\n", n, peer.RemoteAddr().String())
 	} 
 
 	return nil;
@@ -137,17 +147,21 @@ func (s *FileServer) loop() {
 		select {
 		case rpc := <-s.Ops.Transport.Consume():
 			var msg Message;
-			fmt.Printf("Received payload from %s: %v\n", msg.From, msg.Payload)
 			payloadBytes := rpc.Payload
 			if err := gob.NewDecoder(bytes.NewReader(payloadBytes)).Decode(&msg); err != nil {
 				log.Printf("Failed to decode message: %v", err)
+				return
 			}
 
-			fmt.Printf("Decoded message from %s: %s\n", msg.From, string(msg.Payload.([]byte))) 
 
-			// if err := s.handleMessage(&m); err != nil {
-			// 	log.Printf("Failed to handle message: %v", err)
-			// }
+			if err := s.handleMessage(rpc.From, &msg ); err != nil {
+				log.Printf("Failed to handle message: %v", err)
+				return
+			}
+
+			fmt.Printf("Received message : %+v\n", msg.Payload)
+ 
+	
 
 		case <-s.quitch:
 			return
@@ -155,10 +169,34 @@ func (s *FileServer) loop() {
 	}
 }
 
-// func (s *FileServer) handleMessage(msg *Message) error {
+func (s *FileServer) handleMessage(from string, msg *Message) error {
+	switch payload := msg.Payload.(type) {
+	case MessageStoreFile:
+		s.handleMessageStorageFile(from, payload)
+	default:
+		log.Printf("Unknown message type: %T", payload)
+		return nil
+	}
+	return nil
+}
 
-// 	return nil
-// }
+func (s *FileServer) handleMessageStorageFile(from string, msg MessageStoreFile) error {
+			fmt.Printf("%+v\n", msg)
+			peer, ok := s.peers[from]
+			if !ok {
+				log.Printf("Unknown peer: %s", from)
+				return fmt.Errorf("unknown peer: %s", from)
+			}
+
+			if err := s.store.Write(msg.Key, io.LimitReader(peer, int64(msg.Size) )); err != nil {
+				log.Printf("Failed to write to store: %v", err)
+				return err
+			}
+
+			peer.(*p2p.TCPPeer).Wg.Done(); 
+			return nil;
+
+}
 
 func (s *FileServer) Stop() {
 	close(s.quitch)
