@@ -92,7 +92,7 @@ func (s *FileServer) broadcast(msg *Message) error {
 	}
 
 	for _, peer := range s.peers {
-		if err := peer.Send(buf .Bytes()); err != nil {
+		if err := peer.Send(buf.Bytes()); err != nil {
 			log.Printf("Failed to send message to peer %s: %v", peer.RemoteAddr().String(), err)
 			return err
 		}
@@ -117,8 +117,6 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 		return nil, fmt.Errorf("failed to broadcast message: %v", err)
 	}
 	select {}
-
-	return nil, nil
 }
 
 
@@ -207,7 +205,28 @@ func (s *FileServer) loop() {
 }
 
 func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error {
-	fmt.Println("need to get a file from disk and send it over wire");
+	if !s.store.Has(msg.Key) {
+		return fmt.Errorf("need to get file %s from disk and it doesn't exist", msg.Key)
+	}
+
+	r, err := s.store.Read(msg.Key);
+	if err != nil {
+		fmt.Printf("Failed to read file %s from store: %v\n", msg.Key, err)
+		return err
+	}
+
+	peer, ok := s.peers[from]
+	if !ok {
+		fmt.Printf("Unknown peer: %s\n", from)
+		return fmt.Errorf("unknown peer: %s", from)
+	}
+
+	n, err := io.Copy(peer, r);
+	if(err != nil){
+		return err
+	}
+
+	fmt.Printf("Sent %d bytes of file %s to peer %s\n", n, msg.Key, from)
 
 	return nil
 }
