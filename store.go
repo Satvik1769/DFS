@@ -128,16 +128,16 @@ func (s *Store) Has(Key string) bool {
 	return !errors.Is(err, os.ErrNotExist)
 }
 
-func (s *Store) Write(key string, r io.Reader) error {
+func (s *Store) Write(key string, r io.Reader) (int64, error) {
 
 	return s.writeStream(key, r)
 }
 
-func (s *Store) writeStream(key string, r io.Reader) error {
+func (s *Store) writeStream(key string, r io.Reader) (int64, error) {
 	pathName := s.PathTransformFunc(key)
 	pathNameWithRoot := s.Root + "/" + pathName.Pathname
 	if err := os.MkdirAll(pathNameWithRoot, os.ModePerm); err != nil {
-		return err
+		return 0,err
 	}
 
 	fullPath := pathName.FullPathName()
@@ -145,14 +145,13 @@ func (s *Store) writeStream(key string, r io.Reader) error {
 	fullPathWithRoot := s.Root + "/" + fullPath
 	f, err := os.Create(fullPathWithRoot)
 	if err != nil {
-		return err
+		return 0,err
 	}
 
 	n, err := io.Copy(f, r)
 	if err != nil {
-		return err
+		return 0,err
 	}
-	fmt.Printf("Wrote %d bytes to %s\n", n, fullPathWithRoot)
 
-	return nil
+	return n, nil
 }

@@ -70,7 +70,7 @@ type Message struct {
 
 type MessageStoreFile struct {
 	Key string 
-	Size int
+	Size int64
 }
 
 func init() {
@@ -88,30 +88,41 @@ func (s *FileServer) broadcast(msg *Message) error {
 }
 
 func (s *FileServer) StoreData(key string, r io.Reader) error {
-	buf := new(bytes.Buffer)
+	fileBuffer := new(bytes.Buffer)
+	tee := io.TeeReader(r, fileBuffer)
+	size, err := s.store.Write(key, tee);
+	if err != nil {
+		log.Printf("Failed to write to store: %v", err)
+		return err
+	}
+	fmt.Printf("Stored %d bytes for key %s\n", size, key)
+
 	msg := Message{
 		Payload: MessageStoreFile{
 			Key: key,
-			Size: int(r.(*bytes.Reader).Len()),
+			Size: size,
 		},
 	}
 
-	if err := gob.NewEncoder(buf).Encode(&msg); err != nil {
+	msgBuf := new(bytes.Buffer)
+
+
+	if err := gob.NewEncoder(msgBuf).Encode(&msg); err != nil {
 		log.Printf("Failed to encode message: %v", err)
 		return err
 	}
 
 	for _, peer := range s.peers {
-		if err := peer.Send(buf.Bytes()); err != nil {
+		if err := peer.Send(msgBuf.Bytes()); err != nil {
 			log.Printf("Failed to send message to peer %s: %v", peer.RemoteAddr().String(), err)
 			return err
 		}
-	} 
+	}  
 
 	time.Sleep(4 * time.Second)
  
 	for _, peer := range s.peers {
-		n, err := io.Copy(peer, r);
+		n, err := io.Copy(peer, fileBuffer );
 		if  err != nil {
 			log.Printf("Failed to send message to peer %s: %v", peer.RemoteAddr().String(), err)
 			return err
@@ -188,12 +199,16 @@ func (s *FileServer) handleMessageStorageFile(from string, msg MessageStoreFile)
 				return fmt.Errorf("unknown peer: %s", from)
 			}
 
-			if err := s.store.Write(msg.Key, io.LimitReader(peer, int64(msg.Size) )); err != nil {
+			n, err := s.store.Write(msg.Key, io.LimitReader(peer, int64(msg.Size) ));
+			if  err != nil {
 				log.Printf("Failed to write to store: %v", err)
 				return err
 			}
+			fmt.Printf("Stored %d bytes for key %s from peer %s\n", n, msg.Key, from) 
 
 			peer.(*p2p.TCPPeer).Wg.Done(); 
+			fmt.Printf("Wrote %d bytes\n", n)
+
 			return nil;
 
 }

@@ -41,9 +41,13 @@ func TestStore(t *testing.T) {
 	defer teardown(t, s);
 	key := "test_key";
 	data := []byte("This is a test data stream 2.");
-	if err := s.writeStream(key, bytes.NewReader(data)); err != nil {
+
+	n, err := s.writeStream(key, bytes.NewReader(data));
+
+	if  err != nil {
 		t.Errorf("Failed to write stream: %v", err)
 	}
+
 
 	if ok  := s.Has(key); !ok {
 		t.Errorf("Key '%s' should exist after writing", key)
@@ -65,6 +69,7 @@ func TestStore(t *testing.T) {
 	if ok := s.Has(key); ok {
 		t.Errorf("Key '%s' should not exist after deletion", key)
 	}
+	fmt.Printf("TestStore passed, wrote %d bytes for key %s\n", n, key)
 
 }
 
