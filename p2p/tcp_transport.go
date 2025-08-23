@@ -9,140 +9,142 @@ import (
 )
 
 type TCPTransportOps struct {
-	ListenAddr string;
-	HandshakeFunc HandshakeFunc;
-	Decoder Decoder;
-	OnPeer func(Peer) error;
-
+	ListenAddr    string
+	HandshakeFunc HandshakeFunc
+	Decoder       Decoder
+	OnPeer        func(Peer) error
 }
 
 type TCPTransport struct {
-	TCPTransportOps ;
-	listener net.Listener;
-	rpcch chan RPC;
+	TCPTransportOps
+	listener net.Listener
+	rpcch    chan RPC
 }
-
 
 type TCPPeer struct {
-	net.Conn;
+	net.Conn
 	// if we accept and retreive a function false
 	// if we send and retrieve a function true
-	outbound bool;
-	Wg *sync.WaitGroup;
+	outbound bool
+	wg       *sync.WaitGroup
 }
 
-
-
-func NewTcpTransport(opts TCPTransportOps) *TCPTransport{
+func NewTcpTransport(opts TCPTransportOps) *TCPTransport {
 	return &TCPTransport{
 		TCPTransportOps: opts,
-		rpcch: make(chan RPC), 
+		rpcch:           make(chan RPC, 1024 ),
 	}
 }
 
-func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer{
-	return &TCPPeer{Conn: conn, outbound: outbound, Wg: &sync.WaitGroup{}}
+func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
+	return &TCPPeer{Conn: conn, outbound: outbound, wg: &sync.WaitGroup{}}
 }
+
+func (t *TCPTransport) Addr() string {
+	return t.ListenAddr
+} 
 
 func (t *TCPTransport) Close() error {
 	return t.listener.Close()
 }
 
-
 func (t *TCPTransport) ListenAndAccept() error {
-	var err error;
-	t.listener, err = net.Listen("tcp", t.ListenAddr);
-	if(err != nil){
-		return  err;
+	var err error
+	t.listener, err = net.Listen("tcp", t.ListenAddr)
+	if err != nil {
+		return err
 	}
-	go t.startAcceptLoop();
-	log.Printf("TCP Transport listening on %s", t.ListenAddr);
-	return  nil;
+	go t.startAcceptLoop()
+	log.Printf("TCP Transport listening on %s", t.ListenAddr)
+	return nil
 }
 
 func (t *TCPTransport) Consume() <-chan RPC {
-	return t.rpcch;
+	return t.rpcch
 }
 
-func (t *TCPTransport) startAcceptLoop(){
+func (t *TCPTransport) startAcceptLoop() {
 	for {
-		conn, err := t.listener.Accept();
+		conn, err := t.listener.Accept()
 
 		if errors.Is(err, net.ErrClosed) {
-			return;
+			return
 		}
-		if(err != nil){
+		if err != nil {
 			fmt.Printf("TCP Accept error: %s \n", err)
 		}
 
-		fmt.Printf("TCP connection accepted from %+v \n", conn);
-		go t.handleConn(conn, false);
+		fmt.Printf("TCP connection accepted from %+v \n", conn)
+		go t.handleConn(conn, false)
 	}
 }
 
-// Dial establishes a TCP connection to the specified address.
+// Dial esta lishes a TCP connection to the specified address.
 func (t *TCPTransport) Dial(addr string) error {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to dial %s: %w", addr, err)
 	}
 	fmt.Printf("TCP connection established to %s \n", addr)
-	go t.handleConn(conn, true);
-	return  nil;
+	go t.handleConn(conn, true)
+	return nil
 }
 
-
-
+func (p *TCPPeer) CloseStream() {
+	p.wg.Done()
+} 
 
 func (p *TCPPeer) Send(b []byte) error {
 	_, err := p.Conn.Write(b)
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
 	}
-	return nil;
+	return nil
 }
 
+func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
+	var err error
 
-func (t *TCPTransport) handleConn(conn net.Conn, outbound bool){
-	var err error;
+	defer func() {
 
-	   defer func() {
-     
-        if err != nil {
-            fmt.Printf("Closing connection from %s because %v \n", conn.RemoteAddr(), err)
-        } else {
-            fmt.Printf("Closing connection from %s gracefully or client disconnected.\n", conn.RemoteAddr())
-        }
-        conn.Close()
-    }()
+		if err != nil {
+			fmt.Printf("Closing connection from %s because %v \n", conn.RemoteAddr(), err)
+		} else {
+			fmt.Printf("Closing connection from %s gracefully or client disconnected.\n", conn.RemoteAddr())
+		}
+		conn.Close()
+	}()
 
-	peer := NewTCPPeer(conn, outbound);
+	peer := NewTCPPeer(conn, outbound)
 
 	if err = t.HandshakeFunc(peer); err != nil {
-		return;
+		return  
 	}
 
 	if t.OnPeer != nil {
 		if err = t.OnPeer(peer); err != nil {
-			return;
+			return
 		}
 	}
 
-	msg := RPC{};
-	
-	for{
-		err = t.Decoder.Decode(conn, &msg);
-		if  err != nil{
-			return;
-		}
-		msg.From = conn.RemoteAddr().String();
-		peer.Wg.Add(1);
-		fmt.Printf("waiting to stream be done\n")
 
-		t.rpcch <- msg;
-		peer.Wg.Wait()
-		fmt.Printf("streaming done\n")
-		fmt.Printf("Received message: %v \n", msg);
+	for {
+		msg := RPC{}
+		err = t.Decoder.Decode(conn, &msg)
+		if err != nil {
+			return
+		}
+		msg.From = conn.RemoteAddr().String()
+		if msg.Stream {
+			peer.wg.Add(1)
+			fmt.Printf("waiting to stream be done\n") 
+			peer.wg.Wait()
+			fmt.Printf("streaming done\n")
+			continue; 
+		}
+
+		t.rpcch <- msg
+		fmt.Printf("Received message: %v \n", msg)
 	}
 
 }

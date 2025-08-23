@@ -10,28 +10,35 @@ type Decoder interface {
 	Decode(io.Reader, *RPC) error
 }
 
-type GOBDecoder struct{};
-
-
+type GOBDecoder struct{}
 
 func (d GOBDecoder) Decode(r io.Reader, v *RPC) error {
 	return gob.NewDecoder(r).Decode(v)
-	
+
 }
 
-
-type DefaultDecoder struct{};
-
-
+type DefaultDecoder struct{}
 
 func (d DefaultDecoder) Decode(r io.Reader, msg *RPC) error {
-	buf := make([]byte, 1028)  // This creates a []byte
-	n, err := r.Read(buf)   // This works - buf is []byte
+	peekBuff := make([]byte, 1)
+	if _, err := r.Read(peekBuff); err != nil {
+		return err
+	}
+
+	stream := peekBuff[0] == IncomingStream;
+
+	// we will not decode incoming streams here 
+	if(stream){
+		msg.Stream = true
+		return nil
+	}
+
+	buf := make([]byte, 1028) 
+	n, err := r.Read(buf)     
 	if err != nil {
 		return err
 	}
 	fmt.Printf("NOPDecoder read %d bytes: %s\n", n, buf[:n])
-	msg.Payload = buf[:n]  // Assign the read bytes to the message payload
+	msg.Payload = buf[:n]  
 	return nil
 }
-	
