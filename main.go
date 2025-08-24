@@ -2,7 +2,7 @@ package main
 
 import (
 	"DFS/p2p"
-	// "bytes"
+	"bytes"
 	"fmt"
 	"io"
 	"time"
@@ -21,6 +21,7 @@ func makeServer(listenAddr string, nodes ...string) *FileServer {
 		Decoder:       p2p.DefaultDecoder{},
 	})
 	fileServerOpts := FileServerOpts{
+		EncKey:  newEncryptionKey(),
 		StorageRoot:       listenAddr + "_network",
 		PathTransformFunc: CASPathTransformFunc,
 		Transport:         tcpTransport,
@@ -46,34 +47,18 @@ func main() {
 	}()
 
 	time.Sleep(1 * time.Second)
+	key := "test_key"
 
-	for i := 0; i < 1; i++ {
-		// data := bytes.NewReader([]byte("test data"))
-		// s2.Store("test_key_"+fmt.Sprint(i), data)
-		// time.Sleep(100 * time.Millisecond)
+		data := bytes.NewReader([]byte("test data"))
+		s2.Store("test_key", data)
+		time.Sleep(100 * time.Millisecond)
 
-	// r, err := s2.Get("test_key_" + fmt.Sprint(i))
-	// if err != nil {
-	// 	fmt.Printf("Failed to read from store: %v", err)
-	// 	return
-	// }
+		if err := s2.store.Delete(key); err != nil {
+			fmt.Printf("Failed to delete from store: %v", err)
+			return
+		} 
 
-	// b, err := io.ReadAll(r)
-	// if err != nil {
-	// 	fmt.Printf("Failed to read from io.Reader: %v", err)
-	// 	return
-	// }
-	// fmt.Println(string(b))
-	// time.Sleep(100 * time.Millisecond)
-
-
-	} 
-
-		// data := bytes.NewReader([]byte("test data"))
-		// s2.Store("test_key", data)
-		// time.Sleep(100 * time.Millisecond)
-
-	r, err := s2.Get("test_key")
+	r, err := s2.Get(key) 
 	if err != nil {
 		fmt.Printf("Failed to read from store: %v", err)
 		return
