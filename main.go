@@ -36,6 +36,7 @@ func makeServer(listenAddr string, nodes ...string) *FileServer {
 func main() {
 	s1 := makeServer(":3000", "")
 	s2 := makeServer(":4000", ":3000")
+	s3 := makeServer(":5000", ":3000", ":4000")
 
 	go func() {
 		s1.Start()
@@ -46,19 +47,23 @@ func main() {
 		s2.Start()
 	}()
 
+		go func() {
+		s3.Start()
+	}()
+
 	time.Sleep(1 * time.Second)
 	key := "test_key"
 
 		data := bytes.NewReader([]byte("test data"))
-		s2.Store("test_key", data)
+		s3.Store("test_key", data)
 		time.Sleep(100 * time.Millisecond)
 
-		if err := s2.store.Delete(key); err != nil {
+		if err := s3.store.Delete(key); err != nil {
 			fmt.Printf("Failed to delete from store: %v", err)
 			return
 		} 
 
-	r, err := s2.Get(key) 
+	r, err := s3.Get(key) 
 	if err != nil {
 		fmt.Printf("Failed to read from store: %v", err)
 		return
