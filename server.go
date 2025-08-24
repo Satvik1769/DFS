@@ -105,7 +105,7 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 		return s.store.Read(key)
 	}
 
-	fmt.Printf("don't have file %s locally, fetching from network", key)
+	fmt.Printf("don't have file %s locally, fetching from network \n", key)
 	msg := Message{
 		Payload: MessageGetFile{
 			Key: key,
@@ -116,18 +116,22 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 		return nil, fmt.Errorf("failed to broadcast message: %v", err)
 	}
 
+	time.Sleep(500 * time.Millisecond)  
+	// this must be called
+
 	for _, peer := range s.peers {
 		fileBuffer := new(bytes.Buffer)
-		n, err := io.Copy(fileBuffer, peer)
+		n, err := io.CopyN(fileBuffer, peer, 9) // read up to 1MB
 		if err != nil {
 			return nil, fmt.Errorf("failed to read file from peer %s: %v", peer.RemoteAddr().String(), err)
 		}
 
-		fmt.Printf("Received %d bytes from peer %s\n", n, peer.RemoteAddr().String())
+		fmt.Printf("%s Received %d bytes from peer %s\n", s.Ops.Transport.Addr(), n, peer.RemoteAddr().String());
+		fmt.Println(fileBuffer.String())
+		peer.CloseStream()
+		return fileBuffer, nil
 	}
-
-	select {}
-	return nil, nil
+	 return nil, fmt.Errorf("file not found on any peer")
 }
 
 func (s *FileServer) Store(key string, r io.Reader) error {
@@ -214,8 +218,10 @@ func (s *FileServer) loop() {
 
 func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error {
 	if !s.store.Has(msg.Key) {
-		return fmt.Errorf("need to get file %s from disk and it doesn't exist", msg.Key)
+		return fmt.Errorf("%s need to get file %s from disk and it doesn't exist", s.Ops.Transport.Addr(), msg.Key)
 	}
+
+	fmt.Printf("%s serving file %s over the network\n", s.Ops.Transport.Addr(), msg.Key)
 
 	r, err := s.store.Read(msg.Key)
 	if err != nil {
@@ -228,13 +234,15 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 		fmt.Printf("Unknown peer: %s\n", from)
 		return fmt.Errorf("unknown peer: %s", from)
 	}
-
+	peer.Send([]byte{p2p.IncomingStream})
+	 
 	n, err := io.Copy(peer, r)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("Sent %d bytes of file %s to peer %s\n", n, msg.Key, from)
+	fmt.Printf("%s Sent %d bytes of file %s to peer %s\n", s.Ops.Transport.Addr(), n, msg.Key, from)
+
 
 	return nil
 }
@@ -269,8 +277,6 @@ func (s *FileServer) handleMessageStorageFile(from string, msg MessageStoreFile)
 
 	peer.CloseStream()
 	 
-	fmt.Printf("Wrote %d bytes\n", n)
-
 	return nil
 
 }

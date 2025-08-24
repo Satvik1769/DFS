@@ -2,7 +2,7 @@ package main
 
 import (
 	"DFS/p2p"
-	"bytes"
+	// "bytes"
 	"fmt"
 	"io"
 	"time"
@@ -47,12 +47,33 @@ func main() {
 
 	time.Sleep(1 * time.Second)
 
-	for i := 0; i < 10; i++ {
-		data := bytes.NewReader([]byte("test data"))
-		s2.Store("test_key_"+fmt.Sprint(i), data)
-		time.Sleep(100 * time.Millisecond)
+	for i := 0; i < 1; i++ {
+		// data := bytes.NewReader([]byte("test data"))
+		// s2.Store("test_key_"+fmt.Sprint(i), data)
+		// time.Sleep(100 * time.Millisecond)
 
-	r, err := s2.Get("test_key_" + fmt.Sprint(i))
+	// r, err := s2.Get("test_key_" + fmt.Sprint(i))
+	// if err != nil {
+	// 	fmt.Printf("Failed to read from store: %v", err)
+	// 	return
+	// }
+
+	// b, err := io.ReadAll(r)
+	// if err != nil {
+	// 	fmt.Printf("Failed to read from io.Reader: %v", err)
+	// 	return
+	// }
+	// fmt.Println(string(b))
+	// time.Sleep(100 * time.Millisecond)
+
+
+	} 
+
+		// data := bytes.NewReader([]byte("test data"))
+		// s2.Store("test_key", data)
+		// time.Sleep(100 * time.Millisecond)
+
+	r, err := s2.Get("test_key")
 	if err != nil {
 		fmt.Printf("Failed to read from store: %v", err)
 		return
@@ -63,11 +84,7 @@ func main() {
 		fmt.Printf("Failed to read from io.Reader: %v", err)
 		return
 	}
-	fmt.Println(string(b))
-
-	}
-
-
+	fmt.Println(string(b)) 
 
 	select {}
 }
