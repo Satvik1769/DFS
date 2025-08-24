@@ -1,8 +1,7 @@
 package main
 
 import (
-	"bytes"
-	"crypto/sha1"
+ 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -84,22 +83,25 @@ func (p PathKey) FullPathName() string {
 func (s *Store) PathTransformFunc(key string) PathKey {
 	return s.StoreOps.PathTransformFunc(key)
 }
-func (s *Store) readStream(key string) (io.ReadCloser, error) {
+func (s *Store) readStream(key string) (int64, io.ReadCloser, error) {
 	pathName := s.PathTransformFunc(key)
-	return os.Open(s.Root + "/" + pathName.FullPathName())
+	fullPathWithRoot := s.Root + "/" + pathName.FullPathName()
 
+	file, err := os.Open(fullPathWithRoot)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to open file: %v", err)
+	}
+
+	fi, err := file.Stat()
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to stat file: %v", err)
+	}
+
+	return fi.Size(), file, nil
 }
 
-func (s *Store) Read(key string) (io.Reader, error) {
-	f, err := s.readStream(key)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	buf := new(bytes.Buffer)
-	_, err = io.Copy(buf, f)
-
-	return buf, err
+func (s *Store) Read(key string) (int64, io.Reader, error) {
+	return s.readStream(key)
 }
 
 func (s *Store) Delete(key string) error {

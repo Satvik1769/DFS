@@ -52,7 +52,7 @@ func TestStore(t *testing.T) {
 	if ok  := s.Has(key); !ok {
 		t.Errorf("Key '%s' should exist after writing", key)
 	}
-	r, err := s.Read(key);
+	_,  r, err := s.Read(key);
 	if err != nil {
 		t.Errorf("Failed to read stream: %v", err)
 	}
