@@ -37,22 +37,23 @@ func TestPathTransformFunc(t *testing.T) {
 func TestStore(t *testing.T) {
 	
 	s := newStore();
+	id := generateId();
 
 	defer teardown(t, s);
 	key := "test_key";
 	data := []byte("This is a test data stream 2.");
 
-	n, err := s.writeStream(key, bytes.NewReader(data));
+	n, err := s.writeStream(id, key, bytes.NewReader(data));
 
 	if  err != nil {
 		t.Errorf("Failed to write stream: %v", err)
 	}
 
 
-	if ok  := s.Has(key); !ok {
+	if ok  := s.Has(id, key); !ok {
 		t.Errorf("Key '%s' should exist after writing", key)
 	}
-	_,  r, err := s.Read(key);
+	_,  r, err := s.Read(id, key);
 	if err != nil {
 		t.Errorf("Failed to read stream: %v", err)
 	}
@@ -63,10 +64,10 @@ func TestStore(t *testing.T) {
 	if(string(b) != string(data)) {
 		t.Errorf("Data mismatch: expected '%s', got '%s'", string(data), string(b))
 	}
-	if err := s.Delete(key); err != nil {
+	if err := s.Delete(id, key); err != nil {
 		t.Errorf("Failed to delete key: %v", err)
 	}
-	if ok := s.Has(key); ok {
+	if ok := s.Has(id, key); ok {
 		t.Errorf("Key '%s' should not exist after deletion", key)
 	}
 	fmt.Printf("TestStore passed, wrote %d bytes for key %s\n", n, key)

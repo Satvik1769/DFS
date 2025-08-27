@@ -16,11 +16,11 @@ type PathTransformFunc func(string) PathKey
 const DefaultRoot = "store"
 
 type StoreOps struct {
-	// Root is the root directory for the store
+	// Root is the root directory  for the store
 	Root              string
 	PathTransformFunc PathTransformFunc
 }
-
+ 
 type Store struct {
 	StoreOps
 }
@@ -46,6 +46,7 @@ func NewStore(opts StoreOps) *Store {
 	if len(opts.Root) == 0 {
 		opts.Root = DefaultRoot
 	}
+	 
 	return &Store{
 		StoreOps: opts,
 	}
@@ -83,9 +84,9 @@ func (p PathKey) FullPathName() string {
 func (s *Store) PathTransformFunc(key string) PathKey {
 	return s.StoreOps.PathTransformFunc(key)
 }
-func (s *Store) readStream(key string) (int64, io.ReadCloser, error) {
+func (s *Store)  readStream(id string, key string) ( int64, io.ReadCloser, error) {
 	pathName := s.PathTransformFunc(key)
-	fullPathWithRoot := s.Root + "/" + pathName.FullPathName()
+	fullPathWithRoot := s.Root + "/" + id + "/" + pathName.FullPathName()
 
 	file, err := os.Open(fullPathWithRoot)
 	if err != nil {
@@ -94,17 +95,17 @@ func (s *Store) readStream(key string) (int64, io.ReadCloser, error) {
 
 	fi, err := file.Stat()
 	if err != nil {
-		return 0, nil, fmt.Errorf("failed to stat file: %v", err)
+		return 0, nil, fmt.Errorf ("failed to stat file: %v", err)
 	}
 
 	return fi.Size(), file, nil
 }
 
-func (s *Store) Read(key string) (int64, io.Reader, error) {
-	return s.readStream(key)
+func (s *Store) Read(id string, key string) (int64, io.Reader, error) {
+	return s.readStream(id, key)
 }
 
-func (s *Store) Delete(key string) error {
+func (s *Store) Delete(id string,  key string) error {
 	pathKey := s.PathTransformFunc(key)
 
 	defer func() {
@@ -114,7 +115,7 @@ func (s *Store) Delete(key string) error {
 	if err := os.RemoveAll(pathKey.FullPathName()); err != nil {
 		return err
 	}
-	var FirstPathNameWithRoot = s.Root + "/" + pathKey.FirstPathName()
+	var FirstPathNameWithRoot = s.Root + "/" + id + "/" + pathKey.FirstPathName()
 	return os.RemoveAll(FirstPathNameWithRoot)
 }
 
@@ -122,21 +123,21 @@ func (s *Store) Clear() error {
 	return os.RemoveAll(s.Root)
 }
 
-func (s *Store) Has(Key string) bool {
+func (s *Store) Has(id string, Key string) bool {
 	pathKey := s.PathTransformFunc(Key)
-	fullPathWithRoot := s.Root + "/" + pathKey.FullPathName()
+	fullPathWithRoot := s.Root + "/" +  id + "/" +  pathKey.FullPathName()
 
 	_, err := os.Stat(fullPathWithRoot)
 	return !errors.Is(err, os.ErrNotExist)
 }
 
-func (s *Store) Write(key string, r io.Reader) (int64, error) {
+func (s *Store) Write(id string,  key string, r io.Reader) (int64, error) {
 
-	return s.writeStream(key, r)
+	return s.writeStream(id, key,  r)
 }
 
-func (s *Store)  writeDecrypt(encKey []byte, key string,  r io.Reader) (int64, error) {
-	f, err := s.openFileForWriting(key )
+func (s *Store)  writeDecrypt(encKey []byte, id string,  key string,  r io.Reader) (int64, error) {
+	f, err := s.openFileForWriting(id, key )
 	if err != nil {
 		return 0,err
 	}
@@ -147,8 +148,8 @@ func (s *Store)  writeDecrypt(encKey []byte, key string,  r io.Reader) (int64, e
 }
 
 
-func (s *Store) writeStream(key string, r io.Reader) (int64, error) {
-	f, err := s.openFileForWriting(key)
+func (s *Store) writeStream(id string, key string, r io.Reader) (int64, error) {
+	f, err := s.openFileForWriting(id, key)
 	if err != nil {
 		return 0, err
 	}
@@ -157,17 +158,16 @@ func (s *Store) writeStream(key string, r io.Reader) (int64, error) {
 	return  io.Copy(f, r)
 }
 
-func (s *Store)  openFileForWriting(key string) (*os.File, error) {
+func (s *Store)  openFileForWriting(id string, key string) (*os.File, error) {
 	pathName := s.PathTransformFunc(key)
-	pathNameWithRoot := s.Root + "/" + pathName.Pathname
+	pathNameWithRoot := s.Root  + "/" + id + "/" +  pathName.Pathname
 	if err := os.MkdirAll(pathNameWithRoot, os.ModePerm); err != nil {
 		return nil,err
 	}
 
 	fullPath := pathName.FullPathName()
 
-	fullPathWithRoot := s.Root + "/" + fullPath
-	return  os.Create(fullPathWithRoot)
-	
+	fullPathWithRoot := s.Root + "/" + id + "/" +  fullPath
+	return os.Create(fullPathWithRoot)
 
 }

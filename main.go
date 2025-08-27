@@ -58,7 +58,7 @@ func main() {
 		s3.Store("test_key", data)
 		time.Sleep(100 * time.Millisecond)
 
-		if err := s3.store.Delete(key); err != nil {
+		if err := s3.store.Delete(s3.Ops.ID, key); err != nil {
 			fmt.Printf("Failed to delete from store: %v", err)
 			return
 		} 
