@@ -153,10 +153,10 @@ func (s *FileServer) DeleteFromEveryServer(key string) error{
 	if(!s.store.Has(s.Ops.ID, key)){
 		return fmt.Errorf("do not have the file ");
 	}
-	s.store.Delete(s.Ops.ID, key);
 	msg := Message{
 		Payload: MessageDeleteFile{
 			Key: key,
+			ID : s.Ops.ID,
 		},
 	}
 
@@ -164,6 +164,8 @@ func (s *FileServer) DeleteFromEveryServer(key string) error{
 		log.Printf("Failed to broadcast message: %v", err)
 		return err
 	}
+	s.store.Delete(s.Ops.ID, key);
+
 
 	return nil
 }
