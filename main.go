@@ -74,6 +74,10 @@ func main() {
 		fmt.Printf("Failed to read from io.Reader: %v", err)
 		return
 	}
-	fmt.Println(string(b)) 
-
+	fmt.Println(string(b))
+	err = s3.DeleteFromEveryServer(key);
+	if err != nil {
+		fmt.Printf("Failed to delete from every server: %v", err)
+		return
+	}
 }
