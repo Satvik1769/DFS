@@ -88,6 +88,7 @@ type MessageGetFile struct {
 
 type MessageDeleteFile struct {
 	Key string
+	ID string
 }
 
 func init() {
@@ -149,10 +150,10 @@ func (s *FileServer) Get( key string) ( io.Reader, error) {
 }
 
 func (s *FileServer) DeleteFromEveryServer(key string) error{
-	if(!s.store.Has(key)){
+	if(!s.store.Has(s.Ops.ID, key)){
 		return fmt.Errorf("do not have the file ");
 	}
-	s.store.Delete(key);
+	s.store.Delete(s.Ops.ID, key);
 	msg := Message{
 		Payload: MessageDeleteFile{
 			Key: key,
@@ -329,13 +330,13 @@ func (s *FileServer) handleMessageStorageFile(from string, msg MessageStoreFile)
 }
 
 func (s *FileServer) handleMessageDeleteFile(from string, msg MessageDeleteFile) error {
-	if !s.store.Has(msg.Key) {
+	if !s.store.Has(msg.ID,msg.Key) {
 		return fmt.Errorf("%s need to delete file %s from disk and it doesn't exist", s.Ops.Transport.Addr(), msg.Key)
 	}
 
 	fmt.Printf("%s deleting file %s over the network\n", s.Ops.Transport.Addr(), msg.Key)
 
-	if err := s.store.Delete(msg.Key); err != nil {
+	if err := s.store.Delete(msg.ID, msg.Key); err != nil {
 		fmt.Printf("Failed to delete file %s from store: %v\n", msg.Key, err)
 		return err
 	}
