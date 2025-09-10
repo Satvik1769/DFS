@@ -80,4 +80,5 @@ func main() {
 		fmt.Printf("Failed to delete from every server: %v", err)
 		return
 	}
+	time.Sleep(1 * time.Second)
 }
