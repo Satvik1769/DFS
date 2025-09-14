@@ -1,6 +1,7 @@
 package main
 
 import (
+	"DFS/gossip"
 	"DFS/p2p"
 	"bytes"
 	"encoding/binary"
@@ -8,12 +9,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"sync"
 	"time"
+
+	"github.com/hashicorp/memberlist"
 )
 
 type FileServerOpts struct {
-	ID                 string
+	ID                string
 	EncKey            []byte
 	StorageRoot       string
 	PathTransformFunc PathTransformFunc
@@ -22,11 +26,32 @@ type FileServerOpts struct {
 }
 
 type FileServer struct {
-	Ops      FileServerOpts
-	peers    map[string]p2p.Peer
-	peerLock sync.Mutex // to protect access to peers map
-	store    *Store
-	quitch   chan struct{} // channel to signal shutdown
+	Ops        FileServerOpts
+	peers      map[string]p2p.Peer
+	peerLock   sync.Mutex // to protect access to peers map
+	store      *Store
+	quitch     chan struct{} // channel to signal shutdown
+	membership *gossip.Membership
+}
+
+func (s *FileServer) AddPeer(p p2p.Peer) {
+	s.peerLock.Lock()
+	defer s.peerLock.Unlock()
+
+	addr := p.RemoteAddr().String()
+	if _, exists := s.peers[addr]; exists {
+		fmt.Printf("Peer %s already exists, skipping add\n", addr)
+		return
+	}
+
+	s.peers[addr] = p
+	fmt.Printf("Peer %s added successfully\n", addr)
+}
+
+func (s *FileServer) RemovePeer(remoteAddr string) {
+	s.peerLock.Lock()
+	defer s.peerLock.Unlock()
+	delete(s.peers, remoteAddr)
 }
 
 func newFileServer(ops FileServerOpts) *FileServer {
@@ -39,13 +64,20 @@ func newFileServer(ops FileServerOpts) *FileServer {
 	if len(ops.ID) == 0 {
 		ops.ID = generateId()
 	}
-	return &FileServer{
+
+	s := &FileServer{
 		Ops:      ops,
 		store:    store,
 		quitch:   make(chan struct{}),
 		peers:    make(map[string]p2p.Peer),
 		peerLock: sync.Mutex{},
 	}
+
+	if tcpT, ok := ops.Transport.(*p2p.TCPTransport); ok {
+		tcpT.OnPeer = s.OnPeer
+	}
+
+	return s
 }
 
 func (s *FileServer) bootstrapNetwork() error {
@@ -62,13 +94,10 @@ func (s *FileServer) bootstrapNetwork() error {
 	return nil
 }
 
-func (s *FileServer) OnPeer(p p2p.Peer) error {
-	s.peerLock.Lock()
-	defer s.peerLock.Unlock()
-	s.peers[p.RemoteAddr().String()] = p
-	log.Printf("New peer connected: %s", p.RemoteAddr().String())
+func (s *FileServer) OnPeer(peer p2p.Peer) error {
+	fmt.Printf("OnPeer called for %s\n", peer.RemoteAddr().String())
+	s.AddPeer(peer)
 	return nil
-
 }
 
 type Message struct {
@@ -88,7 +117,7 @@ type MessageGetFile struct {
 
 type MessageDeleteFile struct {
 	Key string
-	ID string
+	ID  string
 }
 
 func init() {
@@ -106,7 +135,7 @@ func (s *FileServer) broadcast(msg *Message) error {
 	}
 
 	for _, peer := range s.peers {
-		peer.Send([]byte{p2p.IncomingMessage} )
+		peer.Send([]byte{p2p.IncomingMessage})
 		if err := peer.Send(buf.Bytes()); err != nil {
 			log.Printf("Failed to send message to peer %s: %v", peer.RemoteAddr().String(), err)
 			return err
@@ -115,17 +144,17 @@ func (s *FileServer) broadcast(msg *Message) error {
 	return nil
 }
 
-func (s *FileServer) Get( key string) ( io.Reader, error) {
+func (s *FileServer) Get(key string) (io.Reader, error) {
 	if s.store.Has(s.Ops.ID, key) {
 		_, r, err := s.store.Read(s.Ops.ID, key)
 		return r, err
 	}
 
 	fmt.Printf("don't have file %s locally, fetching from network \n", key)
-	msg := Message{	
+	msg := Message{
 		Payload: MessageGetFile{
 			Key: key,
-			ID : s.Ops.ID,
+			ID:  s.Ops.ID,
 		},
 	}
 
@@ -133,7 +162,7 @@ func (s *FileServer) Get( key string) ( io.Reader, error) {
 		return nil, fmt.Errorf("failed to broadcast message: %v", err)
 	}
 
-	time.Sleep(100 * time.Millisecond)  
+	time.Sleep(100 * time.Millisecond)
 
 	for _, peer := range s.peers {
 		var expectedSize int64
@@ -145,18 +174,18 @@ func (s *FileServer) Get( key string) ( io.Reader, error) {
 		fmt.Printf("%s Received %d bytes from peer %s\n", s.Ops.Transport.Addr(), n, peer.RemoteAddr().String())
 		peer.CloseStream()
 	}
-	 _, r, err := s.store.Read(s.Ops.ID,key)
-	 return r, err
+	_, r, err := s.store.Read(s.Ops.ID, key)
+	return r, err
 }
 
-func (s *FileServer) DeleteFromEveryServer(key string) error{
-	if(!s.store.Has(s.Ops.ID, key)){
-		return fmt.Errorf("do not have the file ");
+func (s *FileServer) DeleteFromEveryServer(key string) error {
+	if !s.store.Has(s.Ops.ID, key) {
+		return fmt.Errorf("do not have the file ")
 	}
 	msg := Message{
 		Payload: MessageDeleteFile{
 			Key: key,
-			ID : s.Ops.ID,
+			ID:  s.Ops.ID,
 		},
 	}
 
@@ -164,8 +193,7 @@ func (s *FileServer) DeleteFromEveryServer(key string) error{
 		log.Printf("Failed to broadcast message: %v", err)
 		return err
 	}
-	s.store.Delete(s.Ops.ID, key);
-
+	s.store.Delete(s.Ops.ID, key)
 
 	return nil
 }
@@ -173,7 +201,7 @@ func (s *FileServer) DeleteFromEveryServer(key string) error{
 func (s *FileServer) Store(key string, r io.Reader) error {
 	fileBuffer := new(bytes.Buffer)
 	tee := io.TeeReader(r, fileBuffer)
-	size, err := s.store.Write(s.Ops.ID,key, tee)
+	size, err := s.store.Write(s.Ops.ID, key, tee)
 	if err != nil {
 		log.Printf("Failed to write to store: %v", err)
 		return err
@@ -209,7 +237,7 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 		return err
 	}
 
-	fmt.Printf(" %s Received and Written %d bytes to peers\n", s.Ops.Transport.Addr(), n )
+	fmt.Printf(" %s Received and Written %d bytes to peers\n", s.Ops.Transport.Addr(), n)
 	return nil
 }
 
@@ -219,9 +247,48 @@ func (s *FileServer) Start() error {
 		return err
 	}
 
-	if len(s.Ops.BootstrapNodes) > 0 {
-		s.bootstrapNetwork()
+	// Parse P2P listen addr
+	bindHost := "127.0.0.1"
+	bindPort := 0
+	if addr := s.Ops.Transport.Addr(); addr != "" {
+		host, portStr, err := net.SplitHostPort(addr)
+		if err == nil {
+			if host != "" {
+				bindHost = host
+			}
+			fmt.Sscanf(portStr, "%d", &bindPort)
+		} else {
+			if addr[0] == ':' {
+				fmt.Sscanf(addr[1:], "%d", &bindPort)
+			} else {
+				fmt.Sscanf(addr, "%d", &bindPort)
+			}
+		}
 	}
+
+	// 👇 Membership now uses n.Name (the P2P addr) to dial peers
+	membership := gossip.New(bindHost, bindPort,
+		func(n *memberlist.Node) {
+			addr := n.Name // <-- use encoded P2P address
+			fmt.Printf("membership: node joined: %s\n", addr)
+			if err := s.Ops.Transport.Dial(addr); err != nil {
+				fmt.Printf("failed to dial new node %s: %v\n", addr, err)
+			}
+		},
+		func(n *memberlist.Node) {
+			addr := n.Name // <-- consistent key
+			fmt.Printf("membership: node left: %s\n", addr)
+			s.RemovePeer(addr)
+		},
+	)
+
+	if len(s.Ops.BootstrapNodes) > 0 {
+		membership.Join(s.Ops.BootstrapNodes)
+	}
+
+	//if len(s.Ops.BootstrapNodes) > 0 {
+	//	s.bootstrapNetwork()
+	//}
 
 	s.loop()
 
@@ -258,22 +325,22 @@ func (s *FileServer) loop() {
 }
 
 func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error {
-	if !s.store.Has(msg.ID,msg.Key) {
+	if !s.store.Has(msg.ID, msg.Key) {
 		return fmt.Errorf("%s need to get file %s from disk and it doesn't exist", s.Ops.Transport.Addr(), msg.Key)
 	}
 
 	fmt.Printf("%s serving file %s over the network\n", s.Ops.Transport.Addr(), msg.Key)
 
-	fileSize, r, err := s.store.Read(msg.ID,msg.Key)
+	fileSize, r, err := s.store.Read(msg.ID, msg.Key)
 	if err != nil {
 		fmt.Printf("Failed to read file %s from store: %v\n", msg.Key, err)
 		return err
 	}
 
-	rc, ok := r.(io.ReadCloser);
+	rc, ok := r.(io.ReadCloser)
 	if ok {
-		fmt.Printf("closing file %s\n", msg.Key);
-		defer rc.Close() 
+		fmt.Printf("closing file %s\n", msg.Key)
+		defer rc.Close()
 	}
 
 	peer, ok := s.peers[from]
@@ -282,7 +349,7 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 		return fmt.Errorf("unknown peer: %s", from)
 	}
 	peer.Send([]byte{p2p.IncomingStream})
-	binary.Write(peer, binary.LittleEndian, fileSize )
+	binary.Write(peer, binary.LittleEndian, fileSize)
 
 	n, err := io.Copy(peer, r)
 	if err != nil {
@@ -290,7 +357,6 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 	}
 
 	fmt.Printf("%s Sent %d bytes of file %s to peer %s\n", s.Ops.Transport.Addr(), n, msg.Key, from)
-
 
 	return nil
 }
@@ -326,13 +392,13 @@ func (s *FileServer) handleMessageStorageFile(from string, msg MessageStoreFile)
 	fmt.Printf("Stored %d bytes for key %s from peer %s\n", n, msg.Key, s.Ops.Transport.Addr())
 
 	peer.CloseStream()
-	 
+
 	return nil
 
 }
 
 func (s *FileServer) handleMessageDeleteFile(from string, msg MessageDeleteFile) error {
-	if !s.store.Has(msg.ID,msg.Key) {
+	if !s.store.Has(msg.ID, msg.Key) {
 		return fmt.Errorf("%s need to delete file %s from disk and it doesn't exist", s.Ops.Transport.Addr(), msg.Key)
 	}
 
@@ -349,4 +415,9 @@ func (s *FileServer) handleMessageDeleteFile(from string, msg MessageDeleteFile)
 
 func (s *FileServer) Stop() {
 	close(s.quitch)
+	s.Ops.Transport.Close() // stop TCP listener
+	if s.membership != nil {
+		s.membership.Leave(time.Second * 5)
+		s.membership.Shutdown()
+	}
 }

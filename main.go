@@ -14,7 +14,6 @@ func OnPeer(peer p2p.Peer) error {
 }
 
 func makeServer(listenAddr string, nodes ...string) *FileServer {
-
 	tcpTransport := p2p.NewTcpTransport(p2p.TCPTransportOps{
 		ListenAddr:    listenAddr,
 		HandshakeFunc: p2p.NOPHandTransport,
@@ -27,16 +26,13 @@ func makeServer(listenAddr string, nodes ...string) *FileServer {
 		Transport:         tcpTransport,
 		BootstrapNodes:    nodes,
 	}
-	s := newFileServer(fileServerOpts)
-	tcpTransport.OnPeer = s.OnPeer
-	return s
-
+	return newFileServer(fileServerOpts)
 }
 
 func main() {
-	s1 := makeServer(":3000", "")
-	s2 := makeServer(":4000", ":3000")
-	s3 := makeServer(":5000", ":3000", ":4000")
+	s1 := makeServer(":3000")
+	s2 := makeServer(":4000", "127.0.0.1:4200")
+	s3 := makeServer(":5000", "127.0.0.1:4200", "127.0.0.1:5200")
 
 	go func() {
 		s1.Start()
@@ -81,4 +77,11 @@ func main() {
 		return
 	}
 	time.Sleep(1 * time.Second)
+
+	s3.Stop()
+	time.Sleep(100 * time.Millisecond)
+	s2.Stop()
+	time.Sleep(100 * time.Millisecond)
+	s1.Stop()
+
 }
