@@ -268,24 +268,44 @@ func (s *FileServer) Start() error {
 	}
 
 	// 👇 Membership now uses n.Name (the P2P addr) to dial peers
-	membership := gossip.New(bindHost, bindPort,
+	s.membership = gossip.New(bindHost, bindPort,
 		func(n *memberlist.Node) {
-			addr := n.Name // <-- use encoded P2P address
+			addr := n.Name
 			fmt.Printf("membership: node joined: %s\n", addr)
 			if err := s.Ops.Transport.Dial(addr); err != nil {
 				fmt.Printf("failed to dial new node %s: %v\n", addr, err)
 			}
 		},
 		func(n *memberlist.Node) {
-			addr := n.Name // <-- consistent key
+			addr := n.Name
 			fmt.Printf("membership: node left: %s\n", addr)
 			s.RemovePeer(addr)
 		},
 	)
 
 	if len(s.Ops.BootstrapNodes) > 0 {
-		gossipAddr := fmt.Sprintf("%s:%d", bindHost, bindPort+1200)
-		membership.Join([]string{gossipAddr})
+		gossipAddrs := []string{}
+		for _, addr := range s.Ops.BootstrapNodes {
+			host, portStr, err := net.SplitHostPort(addr)
+			if err != nil {
+				fmt.Printf("invalid bootstrap node %q: %v\n", addr, err)
+				continue
+			}
+
+			var port int
+			if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
+				fmt.Printf("invalid port in bootstrap node %q: %v\n", addr, err)
+				continue
+			}
+
+			// ✅ Join gossip, not P2P
+			gossipAddr := fmt.Sprintf("%s:%d", host, port+1200)
+			gossipAddrs = append(gossipAddrs, gossipAddr)
+		}
+
+		if err := s.membership.Join(gossipAddrs); err != nil {
+			fmt.Printf("failed to join cluster: %v\n", err)
+		}
 	}
 
 	//if len(s.Ops.BootstrapNodes) > 0 {

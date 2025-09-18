@@ -40,10 +40,9 @@ func New(bindAddr string, p2pPort int, onJoin, onLeave func(*memberlist.Node)) *
 	cfg := memberlist.DefaultLocalConfig()
 
 	// Node.Name carries the P2P address for dialing later
-	cfg.Name = fmt.Sprintf("%s:%d", bindAddr, p2pPort)
-
 	cfg.BindAddr = bindAddr
-	cfg.BindPort = p2pPort + 1200 // gossip separate from P2P
+	cfg.BindPort = p2pPort + 1200                      // gossip port
+	cfg.Name = fmt.Sprintf("%s:%d", bindAddr, p2pPort) // gossip separate from P2P
 
 	cfg.Events = &EventDelegate{
 		onJoin:  onJoin,
