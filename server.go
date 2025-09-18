@@ -34,18 +34,17 @@ type FileServer struct {
 	membership *gossip.Membership
 }
 
-func (s *FileServer) AddPeer(p p2p.Peer) {
+func (s *FileServer) AddPeer(peerID string, p p2p.Peer) {
 	s.peerLock.Lock()
 	defer s.peerLock.Unlock()
 
-	addr := p.RemoteAddr().String()
-	if _, exists := s.peers[addr]; exists {
-		fmt.Printf("Peer %s already exists, skipping add\n", addr)
+	if _, exists := s.peers[peerID]; exists {
+		fmt.Printf("Peer %s already exists, skipping add\n", peerID)
 		return
 	}
 
-	s.peers[addr] = p
-	fmt.Printf("Peer %s added successfully\n", addr)
+	s.peers[peerID] = p
+	fmt.Printf("Peer %s added successfully\n", peerID)
 }
 
 func (s *FileServer) RemovePeer(remoteAddr string) {
@@ -95,8 +94,10 @@ func (s *FileServer) bootstrapNetwork() error {
 }
 
 func (s *FileServer) OnPeer(peer p2p.Peer) error {
-	fmt.Printf("OnPeer called for %s\n", peer.RemoteAddr().String())
-	s.AddPeer(peer)
+	// Instead of using RemoteAddr(), get the stable P2P ID
+	peerID := peer.ID() // <-- add this method in your Peer interface
+	fmt.Printf("OnPeer called for %s\n", peerID)
+	s.AddPeer(peerID, peer)
 	return nil
 }
 
@@ -283,7 +284,8 @@ func (s *FileServer) Start() error {
 	)
 
 	if len(s.Ops.BootstrapNodes) > 0 {
-		membership.Join(s.Ops.BootstrapNodes)
+		gossipAddr := fmt.Sprintf("%s:%d", bindHost, bindPort+1200)
+		membership.Join([]string{gossipAddr})
 	}
 
 	//if len(s.Ops.BootstrapNodes) > 0 {

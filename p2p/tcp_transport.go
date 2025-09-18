@@ -27,22 +27,23 @@ type TCPPeer struct {
 	// if we send and retrieve a function true
 	outbound bool
 	wg       *sync.WaitGroup
+	id       string
 }
 
 func NewTcpTransport(opts TCPTransportOps) *TCPTransport {
 	return &TCPTransport{
 		TCPTransportOps: opts,
-		rpcch:           make(chan RPC, 1024 ),
+		rpcch:           make(chan RPC, 1024),
 	}
 }
 
 func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
-	return &TCPPeer{Conn: conn, outbound: outbound, wg: &sync.WaitGroup{}}
+	return &TCPPeer{Conn: conn, outbound: outbound, wg: &sync.WaitGroup{}, id: conn.RemoteAddr().String()}
 }
 
 func (t *TCPTransport) Addr() string {
 	return t.ListenAddr
-} 
+}
 
 func (t *TCPTransport) Close() error {
 	return t.listener.Close()
@@ -92,7 +93,7 @@ func (t *TCPTransport) Dial(addr string) error {
 
 func (p *TCPPeer) CloseStream() {
 	p.wg.Done()
-} 
+}
 
 func (p *TCPPeer) Send(b []byte) error {
 	_, err := p.Conn.Write(b)
@@ -100,6 +101,10 @@ func (p *TCPPeer) Send(b []byte) error {
 		return fmt.Errorf("failed to send message: %w", err)
 	}
 	return nil
+}
+
+func (p *TCPPeer) ID() string {
+	return p.id
 }
 
 func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
@@ -118,7 +123,7 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 	peer := NewTCPPeer(conn, outbound)
 
 	if err = t.HandshakeFunc(peer); err != nil {
-		return  
+		return
 	}
 
 	if t.OnPeer != nil {
@@ -126,7 +131,6 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 			return
 		}
 	}
-
 
 	for {
 		msg := RPC{}
@@ -137,10 +141,10 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 		msg.From = conn.RemoteAddr().String()
 		if msg.Stream {
 			peer.wg.Add(1)
-			fmt.Printf("waiting to stream be done\n") 
+			fmt.Printf("waiting to stream be done\n")
 			peer.wg.Wait()
 			fmt.Printf("streaming done\n")
-			continue; 
+			continue
 		}
 
 		t.rpcch <- msg

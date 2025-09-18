@@ -6,6 +6,7 @@ type Peer interface {
 	Send([]byte) error
 	net.Conn
 	CloseStream()
+	ID() string
 }
 
 type Transport interface {

@@ -30,9 +30,9 @@ func makeServer(listenAddr string, nodes ...string) *FileServer {
 }
 
 func main() {
-	s1 := makeServer(":3000")
-	s2 := makeServer(":4000", "127.0.0.1:4200")
-	s3 := makeServer(":5000", "127.0.0.1:4200", "127.0.0.1:5200")
+	s1 := makeServer("127.0.0.1:3000")
+	s2 := makeServer("127.0.0.1:4000", "127.0.0.1:3000")
+	s3 := makeServer("127.0.0.1:5000", "127.0.0.1:4000", "127.0.0.1:3000")
 
 	go func() {
 		s1.Start()
