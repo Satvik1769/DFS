@@ -28,6 +28,10 @@ type TCPPeer struct {
 	outbound bool
 	wg       *sync.WaitGroup
 	id       string
+
+	requestReady map[string]chan struct{}
+	pending      map[string]bool
+	mu           sync.Mutex
 }
 
 func NewTcpTransport(opts TCPTransportOps) *TCPTransport {
@@ -38,7 +42,80 @@ func NewTcpTransport(opts TCPTransportOps) *TCPTransport {
 }
 
 func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
-	return &TCPPeer{Conn: conn, outbound: outbound, wg: &sync.WaitGroup{}, id: conn.RemoteAddr().String()}
+	return &TCPPeer{
+		Conn:         conn,
+		outbound:     outbound,
+		wg:           &sync.WaitGroup{},
+		id:           conn.RemoteAddr().String(),
+		requestReady: make(map[string]chan struct{}),
+		pending:      make(map[string]bool),
+	}
+}
+
+func (p *TCPPeer) AddRequest(key string) chan struct{} {
+	p.mu.Lock()
+	if ch, ok := p.requestReady[key]; ok {
+		p.mu.Unlock()
+		fmt.Printf("[%s] AddRequest(existing) %s\n", p.id, key)
+		return ch
+	}
+
+	ch := make(chan struct{}, 1)
+	p.requestReady[key] = ch
+
+	// if there was an earlier SignalReady for this key, deliver it now
+	if p.pending[key] {
+		// attempt to deliver (buffered chan so this won't block)
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+		delete(p.pending, key)
+	}
+	p.mu.Unlock()
+
+	fmt.Printf("[%s] AddRequest(new) %s\n", p.id, key)
+	return ch
+}
+
+func (p *TCPPeer) SignalReady(key string) {
+	p.mu.Lock()
+	ch, ok := p.requestReady[key]
+	if ok {
+		// we have a channel; perform non-blocking send so we don't block the writer
+		// release lock before sending to avoid holding lock during send
+		p.mu.Unlock()
+		fmt.Printf("[%s] SignalReady -> channel %s\n", p.id, key)
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+		return
+	}
+
+	// no channel currently registered — mark pending and return
+	p.pending[key] = true
+	p.mu.Unlock()
+	fmt.Printf("[%s] SignalReady -> pending %s\n", p.id, key)
+}
+
+func (p *TCPPeer) RemoveRequest(key string) {
+	p.mu.Lock()
+	ch, ok := p.requestReady[key]
+	if ok {
+		delete(p.requestReady, key)
+	}
+	// clear any pending mark too (optional)
+	if _, ok2 := p.pending[key]; ok2 {
+		delete(p.pending, key)
+	}
+	p.mu.Unlock()
+
+	if ok {
+		// close outside lock to avoid races
+		close(ch)
+	}
+	fmt.Printf("[%s] RemoveRequest %s (ok=%v)\n", p.id, key, ok)
 }
 
 func (t *TCPTransport) Addr() string {

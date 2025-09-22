@@ -7,6 +7,9 @@ type Peer interface {
 	net.Conn
 	CloseStream()
 	ID() string
+	SignalReady(key string)
+	AddRequest(key string) chan struct{}
+	RemoveRequest(key string)
 }
 
 type Transport interface {

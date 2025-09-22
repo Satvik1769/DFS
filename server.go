@@ -151,7 +151,7 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 		return r, err
 	}
 
-	fmt.Printf("don't have file %s locally, fetching from network \n", key)
+	fmt.Printf("Fetching file %s from network\n", key)
 	msg := Message{
 		Payload: MessageGetFile{
 			Key: key,
@@ -163,20 +163,47 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 		return nil, fmt.Errorf("failed to broadcast message: %v", err)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
+	var lastErr error
 	for _, peer := range s.peers {
-		var expectedSize int64
-		binary.Read(peer, binary.LittleEndian, &expectedSize)
-		n, err := s.store.writeDecrypt(s.Ops.EncKey, s.Ops.ID, key, io.LimitReader(peer, expectedSize))
-		if err != nil {
-			return nil, fmt.Errorf("failed to write file to store: %v", err)
+		readyCh := peer.AddRequest(key)
+
+		select {
+		case <-readyCh:
+			var expectedSize int64
+			if err := binary.Read(peer, binary.LittleEndian, &expectedSize); err != nil {
+				lastErr = fmt.Errorf("failed to read size from peer %s: %v", peer.RemoteAddr(), err)
+				peer.RemoveRequest(key)
+				continue
+			}
+
+			n, err := s.store.writeDecrypt(s.Ops.EncKey, s.Ops.ID, key, io.LimitReader(peer, expectedSize))
+			if err != nil {
+				lastErr = fmt.Errorf("failed to write from peer %s: %v", peer.RemoteAddr(), err)
+				peer.RemoveRequest(key)
+				continue
+			}
+
+			fmt.Printf("Received %d bytes of %s from peer %s\n", n, key, peer.RemoteAddr())
+			peer.CloseStream()
+			peer.RemoveRequest(key)
+			goto Done
+
+		case <-time.After(5 * time.Second):
+			fmt.Printf("Peer %s did not become ready in time\n", peer.RemoteAddr())
+			lastErr = fmt.Errorf("timeout waiting for peer %s", peer.RemoteAddr())
+			peer.RemoveRequest(key)
 		}
-		fmt.Printf("%s Received %d bytes from peer %s\n", s.Ops.Transport.Addr(), n, peer.RemoteAddr().String())
-		peer.CloseStream()
 	}
+
+Done:
 	_, r, err := s.store.Read(s.Ops.ID, key)
-	return r, err
+	if err != nil {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, err
+	}
+	return r, nil
 }
 
 func (s *FileServer) DeleteFromEveryServer(key string) error {
@@ -347,6 +374,12 @@ func (s *FileServer) loop() {
 }
 
 func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error {
+
+	peer, ok := s.peers[from]
+	if !ok {
+		return fmt.Errorf("unknown peer: %s", from)
+	}
+
 	if !s.store.Has(msg.ID, msg.Key) {
 		return fmt.Errorf("%s need to get file %s from disk and it doesn't exist", s.Ops.Transport.Addr(), msg.Key)
 	}
@@ -365,13 +398,10 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 		defer rc.Close()
 	}
 
-	peer, ok := s.peers[from]
-	if !ok {
-		fmt.Printf("Unknown peer: %s\n", from)
-		return fmt.Errorf("unknown peer: %s", from)
-	}
 	peer.Send([]byte{p2p.IncomingStream})
 	binary.Write(peer, binary.LittleEndian, fileSize)
+	fmt.Printf("This is the size of file %s : %d\n", msg.Key, fileSize)
+	peer.SignalReady(msg.Key)
 
 	n, err := io.Copy(peer, r)
 	if err != nil {
