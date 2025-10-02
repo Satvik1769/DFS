@@ -7,9 +7,11 @@ type Peer interface {
 	net.Conn
 	CloseStream()
 	ID() string
-	SignalReady(key string)
-	AddRequest(key string) chan struct{}
-	RemoveRequest(key string)
+	SignalReady()
+	AddRequest() chan struct{}
+	RemoveRequest()
+	GetEpepheral() bool
+	SetEpepheral(bool)
 }
 
 type Transport interface {

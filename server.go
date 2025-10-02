@@ -12,8 +12,6 @@ import (
 	"net"
 	"sync"
 	"time"
-
-	"github.com/hashicorp/memberlist"
 )
 
 type FileServerOpts struct {
@@ -28,6 +26,7 @@ type FileServerOpts struct {
 type FileServer struct {
 	Ops        FileServerOpts
 	peers      map[string]p2p.Peer
+	pending    map[string]p2p.Peer
 	peerLock   sync.Mutex // to protect access to peers map
 	store      *Store
 	quitch     chan struct{} // channel to signal shutdown
@@ -43,8 +42,10 @@ func (s *FileServer) AddPeer(peerID string, p p2p.Peer) {
 		return
 	}
 
-	s.peers[peerID] = p
-	fmt.Printf("Peer %s added successfully\n", peerID)
+	if !p.GetEpepheral() {
+		s.peers[peerID] = p
+		fmt.Printf("Peer %s added successfully\n", peerID)
+	}
 }
 
 func (s *FileServer) RemovePeer(remoteAddr string) {
@@ -94,10 +95,25 @@ func (s *FileServer) bootstrapNetwork() error {
 }
 
 func (s *FileServer) OnPeer(peer p2p.Peer) error {
-	// Instead of using RemoteAddr(), get the stable P2P ID
-	peerID := peer.ID() // <-- add this method in your Peer interface
-	fmt.Printf("OnPeer called for %s\n", peerID)
-	s.AddPeer(peerID, peer)
+	peerID := peer.ID()
+	s.peerLock.Lock()
+	defer s.peerLock.Unlock()
+
+	if _, exists := s.peers[peerID]; exists {
+		fmt.Printf("Peer %s already exists, skipping add\n", peerID)
+		return nil
+	}
+
+	if peer.GetEpepheral() {
+		s.pending[peerID] = peer
+		fmt.Printf("Ephemeral peer %s stored in pending\n", peerID)
+		return nil
+	}
+
+	// Move from pending to ready peers
+	delete(s.pending, peerID)
+	s.peers[peerID] = peer
+	fmt.Printf("Peer %s added successfully\n", peerID)
 	return nil
 }
 
@@ -164,43 +180,56 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 	}
 
 	var lastErr error
+	success := false
+
 	for _, peer := range s.peers {
-		readyCh := peer.AddRequest(key)
+		if peer.GetEpepheral() {
+			continue
+		}
+
+		// Wait for peer to signal readiness
+		readyCh := peer.AddRequest()
+		if readyCh == nil {
+			continue
+		}
 
 		select {
 		case <-readyCh:
+			// Peer is ready, start reading
 			var expectedSize int64
 			if err := binary.Read(peer, binary.LittleEndian, &expectedSize); err != nil {
 				lastErr = fmt.Errorf("failed to read size from peer %s: %v", peer.RemoteAddr(), err)
-				peer.RemoveRequest(key)
+				peer.RemoveRequest()
 				continue
 			}
 
 			n, err := s.store.writeDecrypt(s.Ops.EncKey, s.Ops.ID, key, io.LimitReader(peer, expectedSize))
 			if err != nil {
 				lastErr = fmt.Errorf("failed to write from peer %s: %v", peer.RemoteAddr(), err)
-				peer.RemoveRequest(key)
+				peer.RemoveRequest()
 				continue
 			}
 
 			fmt.Printf("Received %d bytes of %s from peer %s\n", n, key, peer.RemoteAddr())
 			peer.CloseStream()
-			peer.RemoveRequest(key)
+			peer.RemoveRequest()
+			success = true
 			goto Done
 
-		case <-time.After(5 * time.Second):
-			fmt.Printf("Peer %s did not become ready in time\n", peer.RemoteAddr())
+		case <-time.After(7 * time.Second):
+			fmt.Printf("Peer %s did not become ready in time\n", peer.ID())
 			lastErr = fmt.Errorf("timeout waiting for peer %s", peer.RemoteAddr())
-			peer.RemoveRequest(key)
+			peer.RemoveRequest()
 		}
 	}
 
 Done:
+	if !success {
+		return nil, fmt.Errorf("failed to fetch file from any peer: %v", lastErr)
+	}
+
 	_, r, err := s.store.Read(s.Ops.ID, key)
 	if err != nil {
-		if lastErr != nil {
-			return nil, lastErr
-		}
 		return nil, err
 	}
 	return r, nil
@@ -296,17 +325,16 @@ func (s *FileServer) Start() error {
 
 	// 👇 Membership now uses n.Name (the P2P addr) to dial peers
 	s.membership = gossip.New(bindHost, bindPort,
-		func(n *memberlist.Node) {
-			addr := n.Name
-			fmt.Printf("membership: node joined: %s\n", addr)
-			if err := s.Ops.Transport.Dial(addr); err != nil {
-				fmt.Printf("failed to dial new node %s: %v\n", addr, err)
+		func(peerID string) {
+			// peerID already contains IP:storePort
+			fmt.Printf("membership: node joined: %s\n", peerID)
+			if err := s.Ops.Transport.Dial(peerID); err != nil {
+				fmt.Printf("failed to dial new node %s: %v\n", peerID, err)
 			}
 		},
-		func(n *memberlist.Node) {
-			addr := n.Name
-			fmt.Printf("membership: node left: %s\n", addr)
-			s.RemovePeer(addr)
+		func(peerID string) {
+			fmt.Printf("membership: node left: %s\n", peerID)
+			s.RemovePeer(peerID)
 		},
 	)
 
@@ -374,7 +402,6 @@ func (s *FileServer) loop() {
 }
 
 func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error {
-
 	peer, ok := s.peers[from]
 	if !ok {
 		return fmt.Errorf("unknown peer: %s", from)
@@ -386,46 +413,58 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 
 	fmt.Printf("%s serving file %s over the network\n", s.Ops.Transport.Addr(), msg.Key)
 
+	// **Register the request FIRST**
+	readyCh := peer.AddRequest()
+	if readyCh == nil {
+		return fmt.Errorf("request already pending for key: %s", msg.Key)
+	}
+
 	fileSize, r, err := s.store.Read(msg.ID, msg.Key)
 	if err != nil {
+		peer.RemoveRequest() // Clean up on error
 		fmt.Printf("Failed to read file %s from store: %v\n", msg.Key, err)
 		return err
 	}
 
-	rc, ok := r.(io.ReadCloser)
-	if ok {
-		fmt.Printf("closing file %s\n", msg.Key)
+	if rc, ok := r.(io.ReadCloser); ok {
 		defer rc.Close()
 	}
 
+	// **Signal readiness AFTER registration**
+	peer.SignalReady()
+
+	// Send the file data
 	peer.Send([]byte{p2p.IncomingStream})
-	binary.Write(peer, binary.LittleEndian, fileSize)
-	fmt.Printf("This is the size of file %s : %d\n", msg.Key, fileSize)
-	peer.SignalReady(msg.Key)
+	if err := binary.Write(peer, binary.LittleEndian, fileSize); err != nil {
+		peer.RemoveRequest()
+		return err
+	}
 
 	n, err := io.Copy(peer, r)
 	if err != nil {
+		peer.RemoveRequest()
 		return err
 	}
 
 	fmt.Printf("%s Sent %d bytes of file %s to peer %s\n", s.Ops.Transport.Addr(), n, msg.Key, from)
 
+	// Don't remove request here - let the receiving end do it after successful transfer
 	return nil
 }
 
 func (s *FileServer) handleMessage(from string, msg *Message) error {
 	switch payload := msg.Payload.(type) {
 	case MessageStoreFile:
-		s.handleMessageStorageFile(from, payload)
+		return s.handleMessageStorageFile(from, payload)
 	case MessageGetFile:
-		s.handleMessageGetFile(from, payload)
+		return s.handleMessageGetFile(from, payload)
 	case MessageDeleteFile:
-		s.handleMessageDeleteFile(from, payload)
+		return s.handleMessageDeleteFile(from, payload)
 	default:
 		log.Printf("Unknown message type: %T", payload)
 		return nil
 	}
-	return nil
+
 }
 
 func (s *FileServer) handleMessageStorageFile(from string, msg MessageStoreFile) error {
