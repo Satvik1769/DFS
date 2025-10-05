@@ -44,6 +44,31 @@ func joinRoom(roomCode string, listenAddr string) *FileServer {
 	return makeServer(listenAddr, room.Peers...)
 }
 
+func leaveRoom(roomCode string, listenAddr string, server *FileServer) {
+	room, exists := rooms[roomCode]
+	if !exists {
+		fmt.Printf("Room with code %s does not exist\n", roomCode)
+		return
+	}
+
+	// Remove the peer from the room
+	for i, peer := range room.Peers {
+		if peer == listenAddr {
+			room.Peers = append(room.Peers[:i], room.Peers[i+1:]...)
+			break
+		}
+	}
+
+	fmt.Printf("Peer %s left room %s. Remaining peers: %v\n", listenAddr, roomCode, room.Peers)
+
+	// Check if the server is not nil before stopping it
+	if server != nil {
+		server.Stop()
+	} else {
+		fmt.Printf("Server for peer %s is nil, cannot stop\n", listenAddr)
+	}
+}
+
 func makeServer(listenAddr string, nodes ...string) *FileServer {
 	tcpTransport := p2p.NewTcpTransport(p2p.TCPTransportOps{
 		ListenAddr:    listenAddr,
@@ -84,6 +109,8 @@ func main() {
 	time.Sleep(1 * time.Second)
 	key := "test_key"
 
+	//leaveRoom(roomCode, "127.0.0.1:4000", s2)
+
 	data := bytes.NewReader([]byte("test data"))
 	s3.Store("test_key", data)
 	time.Sleep(100 * time.Millisecond)
@@ -114,7 +141,7 @@ func main() {
 
 	s3.Stop()
 	time.Sleep(100 * time.Millisecond)
-	s2.Stop()
+	//s2.Stop()
 	time.Sleep(100 * time.Millisecond)
 	s1.Stop()
 
