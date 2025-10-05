@@ -6,6 +6,12 @@ type Peer interface {
 	Send([]byte) error
 	net.Conn
 	CloseStream()
+	ID() string
+	SignalReady()
+	AddRequest() chan struct{}
+	RemoveRequest()
+	GetEpepheral() bool
+	SetEpepheral(bool)
 }
 
 type Transport interface {

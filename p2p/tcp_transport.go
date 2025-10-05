@@ -27,22 +27,97 @@ type TCPPeer struct {
 	// if we send and retrieve a function true
 	outbound bool
 	wg       *sync.WaitGroup
+	id       string
+
+	requestReady chan struct{}
+	pending      bool
+	epepheral    bool
+	mu           sync.Mutex
 }
 
 func NewTcpTransport(opts TCPTransportOps) *TCPTransport {
 	return &TCPTransport{
 		TCPTransportOps: opts,
-		rpcch:           make(chan RPC, 1024 ),
+		rpcch:           make(chan RPC, 1024),
 	}
 }
 
 func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
-	return &TCPPeer{Conn: conn, outbound: outbound, wg: &sync.WaitGroup{}}
+
+	var id string
+	if outbound {
+		// We dialed -> remote is the server with real store port
+		id = conn.RemoteAddr().String()
+	} else {
+		// We accepted -> local is our listening port
+		id = conn.LocalAddr().String()
+	}
+
+	return &TCPPeer{
+		Conn:         conn,
+		outbound:     outbound,
+		wg:           &sync.WaitGroup{},
+		id:           id,
+		requestReady: nil,
+		pending:      false,
+	}
+}
+
+func (p *TCPPeer) AddRequest() chan struct{} {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.requestReady == nil {
+		p.requestReady = make(chan struct{}, 1)
+	}
+
+	// If there was a pending signal, deliver it now
+	if p.pending {
+		select {
+		case p.requestReady <- struct{}{}:
+		default:
+		}
+		p.pending = false
+	}
+
+	fmt.Printf("[%s] AddRequest\n", p.id)
+	return p.requestReady
+}
+
+func (p *TCPPeer) SignalReady() {
+	p.mu.Lock()
+	// Lazily create the channel if nil
+	if p.requestReady == nil {
+		p.requestReady = make(chan struct{}, 1)
+	}
+
+	// Mark as pending and send non-blocking
+	p.pending = true
+	ch := p.requestReady
+	p.mu.Unlock()
+
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+func (p *TCPPeer) RemoveRequest() {
+	p.mu.Lock()
+	ch := p.requestReady
+	p.requestReady = nil
+	p.pending = false
+	p.mu.Unlock()
+
+	if ch != nil {
+		close(ch)
+	}
+	fmt.Printf("[%s] RemoveRequest\n", p.id)
 }
 
 func (t *TCPTransport) Addr() string {
 	return t.ListenAddr
-} 
+}
 
 func (t *TCPTransport) Close() error {
 	return t.listener.Close()
@@ -92,7 +167,20 @@ func (t *TCPTransport) Dial(addr string) error {
 
 func (p *TCPPeer) CloseStream() {
 	p.wg.Done()
-} 
+}
+
+// Get/Set ephemeral flag
+func (p *TCPPeer) GetEpepheral() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.epepheral
+}
+
+func (p *TCPPeer) SetEpepheral(epepheral bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.epepheral = epepheral
+}
 
 func (p *TCPPeer) Send(b []byte) error {
 	_, err := p.Conn.Write(b)
@@ -102,11 +190,13 @@ func (p *TCPPeer) Send(b []byte) error {
 	return nil
 }
 
+func (p *TCPPeer) ID() string {
+	return p.id
+}
+
 func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 	var err error
-
 	defer func() {
-
 		if err != nil {
 			fmt.Printf("Closing connection from %s because %v \n", conn.RemoteAddr(), err)
 		} else {
@@ -114,11 +204,10 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 		}
 		conn.Close()
 	}()
-
 	peer := NewTCPPeer(conn, outbound)
 
 	if err = t.HandshakeFunc(peer); err != nil {
-		return  
+		return
 	}
 
 	if t.OnPeer != nil {
@@ -126,7 +215,6 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 			return
 		}
 	}
-
 
 	for {
 		msg := RPC{}
@@ -137,10 +225,10 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 		msg.From = conn.RemoteAddr().String()
 		if msg.Stream {
 			peer.wg.Add(1)
-			fmt.Printf("waiting to stream be done\n") 
+			fmt.Printf("waiting to stream be done\n")
 			peer.wg.Wait()
 			fmt.Printf("streaming done\n")
-			continue; 
+			continue
 		}
 
 		t.rpcch <- msg
