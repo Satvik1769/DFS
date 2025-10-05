@@ -179,77 +179,92 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 		return nil, fmt.Errorf("failed to broadcast message: %v", err)
 	}
 
-	// Create request channels for all non-ephemeral peers BEFORE broadcasting
-	peerChannels := make(map[string]chan struct{})
+	// Collect peers and their channels
+	type peerWithChan struct {
+		addr string
+		peer p2p.Peer
+		ch   chan struct{}
+	}
+
+	var peersToCheck []peerWithChan
 	for addr, peer := range s.peers {
 		if !peer.GetEpepheral() {
 			ch := peer.AddRequest()
 			if ch != nil {
-				peerChannels[addr] = ch
+				peersToCheck = append(peersToCheck, peerWithChan{
+					addr: addr,
+					peer: peer,
+					ch:   ch,
+				})
 			}
 		}
 	}
 
-	if len(peerChannels) == 0 {
+	if len(peersToCheck) == 0 {
 		return nil, fmt.Errorf("no peers available to fetch file from")
 	}
 
+	// Use a goroutine to wait for first successful response
+	resultCh := make(chan error, len(peersToCheck))
+	var successPeer p2p.Peer
+	var once sync.Once
+
+	for _, p := range peersToCheck {
+		go func(peerData peerWithChan) {
+			select {
+			case <-peerData.ch:
+				// Try to read from this peer
+				var expectedSize int64
+				if err := binary.Read(peerData.peer, binary.LittleEndian, &expectedSize); err != nil {
+					peerData.peer.RemoveRequest()
+					resultCh <- fmt.Errorf("failed to read size from peer %s: %v", peerData.peer.RemoteAddr(), err)
+					return
+				}
+
+				n, err := s.store.writeDecrypt(s.Ops.EncKey, s.Ops.ID, key, io.LimitReader(peerData.peer, expectedSize))
+				if err != nil {
+					peerData.peer.RemoveRequest()
+					resultCh <- fmt.Errorf("failed to write from peer %s: %v", peerData.peer.RemoteAddr(), err)
+					return
+				}
+
+				fmt.Printf("Received %d bytes of %s from peer %s\n", n, key, peerData.peer.RemoteAddr())
+				peerData.peer.CloseStream()
+				peerData.peer.RemoveRequest()
+
+				once.Do(func() {
+					successPeer = peerData.peer
+				})
+				resultCh <- nil // Success
+
+			case <-time.After(7 * time.Second):
+				fmt.Printf("Peer %s did not become ready in time\n", peerData.peer.ID())
+				peerData.peer.RemoveRequest()
+				resultCh <- fmt.Errorf("timeout waiting for peer %s", peerData.peer.RemoteAddr())
+			}
+		}(p)
+	}
+
+	// Wait for first successful response
 	var lastErr error
-	success := false
-
-	// Wait for ANY peer to respond
-	for addr, readyCh := range peerChannels {
-		peer := s.peers[addr]
-
-		select {
-		case <-readyCh:
-			// Peer is ready, start reading
-			var expectedSize int64
-			if err := binary.Read(peer, binary.LittleEndian, &expectedSize); err != nil {
-				lastErr = fmt.Errorf("failed to read size from peer %s: %v", peer.RemoteAddr(), err)
-				peer.RemoveRequest()
-				continue
-			}
-
-			n, err := s.store.writeDecrypt(s.Ops.EncKey, s.Ops.ID, key, io.LimitReader(peer, expectedSize))
-			if err != nil {
-				lastErr = fmt.Errorf("failed to write from peer %s: %v", peer.RemoteAddr(), err)
-				peer.RemoveRequest()
-				continue
-			}
-
-			fmt.Printf("Received %d bytes of %s from peer %s\n", n, key, peer.RemoteAddr())
-			peer.CloseStream()
-			peer.RemoveRequest()
-			success = true
-
-			// Clean up remaining peer requests
-			for otherAddr, otherPeer := range s.peers {
-				if otherAddr != addr {
-					otherPeer.RemoveRequest()
+	for i := 0; i < len(peersToCheck); i++ {
+		err := <-resultCh
+		if err == nil {
+			// Success! Clean up other peers
+			for _, p := range peersToCheck {
+				if p.peer != successPeer {
+					p.peer.RemoveRequest()
 				}
 			}
-			goto Done
 
-		case <-time.After(7 * time.Second):
-			fmt.Printf("Peer %s did not become ready in time\n", peer.ID())
-			lastErr = fmt.Errorf("timeout waiting for peer %s", peer.RemoteAddr())
-			peer.RemoveRequest()
+			_, r, readErr := s.store.Read(s.Ops.ID, key)
+			return r, readErr
 		}
+		lastErr = err
 	}
 
-Done:
-	if !success {
-		return nil, fmt.Errorf("failed to fetch file from any peer: %v", lastErr)
-	}
-
-	_, r, err := s.store.Read(s.Ops.ID, key)
-	if err != nil {
-		return nil, err
-	}
-	return r, nil
+	return nil, fmt.Errorf("failed to fetch file from any peer: %v", lastErr)
 }
-
 func (s *FileServer) DeleteFromEveryServer(key string) error {
 	if !s.store.Has(s.Ops.ID, key) {
 		return fmt.Errorf("do not have the file ")

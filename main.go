@@ -13,6 +13,37 @@ func OnPeer(peer p2p.Peer) error {
 	return nil
 }
 
+type Room struct {
+	Code  string
+	Peers []string
+}
+
+var rooms = make(map[string]*Room)
+
+func createRoom(listenAddr string, roomCode string) *FileServer {
+	rooms[roomCode] = &Room{
+		Code:  roomCode,
+		Peers: []string{listenAddr},
+	}
+	fmt.Printf("Room created with code: %s\n", roomCode)
+	return makeServer(listenAddr)
+}
+
+func generateRoomCode() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+func joinRoom(roomCode string, listenAddr string) *FileServer {
+	room, exists := rooms[roomCode]
+	if !exists {
+		fmt.Printf("Room with code %s does not exist\n", roomCode)
+		return nil
+	}
+	room.Peers = append(room.Peers, listenAddr)
+	fmt.Printf("Joined room %s with peers: %v\n", roomCode, room.Peers)
+	return makeServer(listenAddr, room.Peers...)
+}
+
 func makeServer(listenAddr string, nodes ...string) *FileServer {
 	tcpTransport := p2p.NewTcpTransport(p2p.TCPTransportOps{
 		ListenAddr:    listenAddr,
@@ -30,9 +61,12 @@ func makeServer(listenAddr string, nodes ...string) *FileServer {
 }
 
 func main() {
-	s1 := makeServer("127.0.0.1:3000")
-	s2 := makeServer("127.0.0.1:4000", "127.0.0.1:3000")
-	s3 := makeServer("127.0.0.1:5000", "127.0.0.1:4000", "127.0.0.1:3000")
+	roomCode := generateRoomCode()
+	s1 := createRoom("127.0.0.1:3000", roomCode)
+
+	// Join the room
+	s2 := joinRoom(roomCode, "127.0.0.1:4000")
+	s3 := joinRoom(roomCode, "127.0.0.1:5000")
 
 	go func() {
 		s1.Start()
