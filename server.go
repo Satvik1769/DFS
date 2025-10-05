@@ -179,19 +179,27 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 		return nil, fmt.Errorf("failed to broadcast message: %v", err)
 	}
 
+	// Create request channels for all non-ephemeral peers BEFORE broadcasting
+	peerChannels := make(map[string]chan struct{})
+	for addr, peer := range s.peers {
+		if !peer.GetEpepheral() {
+			ch := peer.AddRequest()
+			if ch != nil {
+				peerChannels[addr] = ch
+			}
+		}
+	}
+
+	if len(peerChannels) == 0 {
+		return nil, fmt.Errorf("no peers available to fetch file from")
+	}
+
 	var lastErr error
 	success := false
 
-	for _, peer := range s.peers {
-		if peer.GetEpepheral() {
-			continue
-		}
-
-		// Wait for peer to signal readiness
-		readyCh := peer.AddRequest()
-		if readyCh == nil {
-			continue
-		}
+	// Wait for ANY peer to respond
+	for addr, readyCh := range peerChannels {
+		peer := s.peers[addr]
 
 		select {
 		case <-readyCh:
@@ -214,6 +222,13 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 			peer.CloseStream()
 			peer.RemoveRequest()
 			success = true
+
+			// Clean up remaining peer requests
+			for otherAddr, otherPeer := range s.peers {
+				if otherAddr != addr {
+					otherPeer.RemoveRequest()
+				}
+			}
 			goto Done
 
 		case <-time.After(7 * time.Second):
@@ -413,15 +428,8 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 
 	fmt.Printf("%s serving file %s over the network\n", s.Ops.Transport.Addr(), msg.Key)
 
-	// **Register the request FIRST**
-	readyCh := peer.AddRequest()
-	if readyCh == nil {
-		return fmt.Errorf("request already pending for key: %s", msg.Key)
-	}
-
 	fileSize, r, err := s.store.Read(msg.ID, msg.Key)
 	if err != nil {
-		peer.RemoveRequest() // Clean up on error
 		fmt.Printf("Failed to read file %s from store: %v\n", msg.Key, err)
 		return err
 	}
@@ -430,25 +438,19 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 		defer rc.Close()
 	}
 
-	// **Signal readiness AFTER registration**
-	peer.SignalReady()
-
-	// Send the file data
+	// Send the file data immediately - no need to track requests on sender side
 	peer.Send([]byte{p2p.IncomingStream})
 	if err := binary.Write(peer, binary.LittleEndian, fileSize); err != nil {
-		peer.RemoveRequest()
 		return err
 	}
 
 	n, err := io.Copy(peer, r)
 	if err != nil {
-		peer.RemoveRequest()
 		return err
 	}
 
 	fmt.Printf("%s Sent %d bytes of file %s to peer %s\n", s.Ops.Transport.Addr(), n, msg.Key, from)
 
-	// Don't remove request here - let the receiving end do it after successful transfer
 	return nil
 }
 
