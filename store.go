@@ -1,7 +1,7 @@
 package main
 
 import (
- 	"crypto/sha1"
+	"crypto/sha1"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -20,9 +20,10 @@ type StoreOps struct {
 	Root              string
 	PathTransformFunc PathTransformFunc
 }
- 
+
 type Store struct {
 	StoreOps
+	keys map[string]struct{}
 }
 
 type PathKey struct {
@@ -46,10 +47,17 @@ func NewStore(opts StoreOps) *Store {
 	if len(opts.Root) == 0 {
 		opts.Root = DefaultRoot
 	}
-	 
+
 	return &Store{
 		StoreOps: opts,
 	}
+}
+
+func (s *Store) AddKey(key string) {
+	if s.keys == nil {
+		s.keys = make(map[string]struct{})
+	}
+	s.keys[key] = struct{}{}
 }
 
 func CASPathTransformFunc(key string) PathKey {
@@ -84,7 +92,7 @@ func (p PathKey) FullPathName() string {
 func (s *Store) PathTransformFunc(key string) PathKey {
 	return s.StoreOps.PathTransformFunc(key)
 }
-func (s *Store)  readStream(id string, key string) ( int64, io.ReadCloser, error) {
+func (s *Store) readStream(id string, key string) (int64, io.ReadCloser, error) {
 	pathName := s.PathTransformFunc(key)
 	fullPathWithRoot := s.Root + "/" + id + "/" + pathName.FullPathName()
 
@@ -95,7 +103,7 @@ func (s *Store)  readStream(id string, key string) ( int64, io.ReadCloser, error
 
 	fi, err := file.Stat()
 	if err != nil {
-		return 0, nil, fmt.Errorf ("failed to stat file: %v", err)
+		return 0, nil, fmt.Errorf("failed to stat file: %v", err)
 	}
 
 	return fi.Size(), file, nil
@@ -105,7 +113,7 @@ func (s *Store) Read(id string, key string) (int64, io.Reader, error) {
 	return s.readStream(id, key)
 }
 
-func (s *Store) Delete(id string,  key string) error {
+func (s *Store) Delete(id string, key string) error {
 	pathKey := s.PathTransformFunc(key)
 
 	defer func() {
@@ -125,28 +133,27 @@ func (s *Store) Clear() error {
 
 func (s *Store) Has(id string, Key string) bool {
 	pathKey := s.PathTransformFunc(Key)
-	fullPathWithRoot := s.Root + "/" +  id + "/" +  pathKey.FullPathName()
+	fullPathWithRoot := s.Root + "/" + id + "/" + pathKey.FullPathName()
 
 	_, err := os.Stat(fullPathWithRoot)
 	return !errors.Is(err, os.ErrNotExist)
 }
 
-func (s *Store) Write(id string,  key string, r io.Reader) (int64, error) {
+func (s *Store) Write(id string, key string, r io.Reader) (int64, error) {
 
-	return s.writeStream(id, key,  r)
+	return s.writeStream(id, key, r)
 }
 
-func (s *Store)  writeDecrypt(encKey []byte, id string,  key string,  r io.Reader) (int64, error) {
-	f, err := s.openFileForWriting(id, key )
+func (s *Store) writeDecrypt(encKey []byte, id string, key string, r io.Reader) (int64, error) {
+	f, err := s.openFileForWriting(id, key)
 	if err != nil {
-		return 0,err
+		return 0, err
 	}
 
-	n, err := copyDecrypt(encKey, r, f);
+	n, err := copyDecrypt(encKey, r, f)
 
 	return int64(n), err
 }
-
 
 func (s *Store) writeStream(id string, key string, r io.Reader) (int64, error) {
 	f, err := s.openFileForWriting(id, key)
@@ -155,19 +162,20 @@ func (s *Store) writeStream(id string, key string, r io.Reader) (int64, error) {
 	}
 	defer f.Close()
 
-	return  io.Copy(f, r)
+	s.AddKey(key)
+	return io.Copy(f, r)
 }
 
-func (s *Store)  openFileForWriting(id string, key string) (*os.File, error) {
+func (s *Store) openFileForWriting(id string, key string) (*os.File, error) {
 	pathName := s.PathTransformFunc(key)
-	pathNameWithRoot := s.Root  + "/" + id + "/" +  pathName.Pathname
+	pathNameWithRoot := s.Root + "/" + id + "/" + pathName.Pathname
 	if err := os.MkdirAll(pathNameWithRoot, os.ModePerm); err != nil {
-		return nil,err
+		return nil, err
 	}
 
 	fullPath := pathName.FullPathName()
 
-	fullPathWithRoot := s.Root + "/" + id + "/" +  fullPath
+	fullPathWithRoot := s.Root + "/" + id + "/" + fullPath
 	return os.Create(fullPathWithRoot)
 
 }

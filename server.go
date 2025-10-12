@@ -10,6 +10,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -265,6 +268,48 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 
 	return nil, fmt.Errorf("failed to fetch file from any peer: %v", lastErr)
 }
+
+func (s *FileServer) GetFolder(baseKey, destPath string) error {
+	// 1️⃣ List all keys with the prefix
+	keys := s.store.ListKeysByPrefix(baseKey)
+
+	if len(keys) == 0 {
+		return fmt.Errorf("no files found with prefix %s", baseKey)
+	}
+
+	// 2️⃣ Fetch each file
+	for _, key := range keys {
+		r, err := s.Get(key)
+		if err != nil {
+			return fmt.Errorf("failed to get key %s: %w", key, err)
+		}
+
+		// Compute relative path from baseKey
+		relPath := strings.TrimPrefix(key, baseKey)
+		relPath = strings.TrimPrefix(relPath, "/")
+		fullPath := filepath.Join(destPath, relPath)
+
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+			return fmt.Errorf("failed to create directories for %s: %w", fullPath, err)
+		}
+
+		outFile, err := os.Create(fullPath)
+		if err != nil {
+			return fmt.Errorf("failed to create file %s: %w", fullPath, err)
+		}
+
+		_, err = io.Copy(outFile, r)
+		outFile.Close()
+		if err != nil {
+			return fmt.Errorf("failed to write file %s: %w", fullPath, err)
+		}
+
+		fmt.Printf("✅ Retrieved file %s → %s\n", key, fullPath)
+	}
+
+	return nil
+}
+
 func (s *FileServer) DeleteFromEveryServer(key string) error {
 	if !s.store.Has(s.Ops.ID, key) {
 		return fmt.Errorf("do not have the file ")
@@ -325,6 +370,42 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 	}
 
 	fmt.Printf(" %s Received and Written %d bytes to peers\n", s.Ops.Transport.Addr(), n)
+	return nil
+}
+
+func (s *FileServer) StoreFolder(baseKey, folderPath string) error {
+	err := filepath.WalkDir(folderPath, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(folderPath, path)
+		if err != nil {
+			return err
+		}
+
+		key := filepath.ToSlash(filepath.Join(baseKey, relPath))
+
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+
+		fmt.Printf("📦 Storing file: %s → key: %s\n", path, key)
+		if err := s.Store(key, file); err != nil {
+			return fmt.Errorf("failed to store %s: %w", path, err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -437,6 +518,8 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 		return fmt.Errorf("unknown peer: %s", from)
 	}
 
+	//fmt.Printf("📥 Received decoded message: %+v\n", msg)
+
 	if !s.store.Has(msg.ID, msg.Key) {
 		return fmt.Errorf("%s need to get file %s from disk and it doesn't exist", s.Ops.Transport.Addr(), msg.Key)
 	}
@@ -528,4 +611,15 @@ func (s *FileServer) Stop() {
 		s.membership.Leave(time.Second * 5)
 		s.membership.Shutdown()
 	}
+}
+
+// ListKeysByPrefix simply filters the in-memory keys
+func (s *Store) ListKeysByPrefix(prefix string) []string {
+	var results []string
+	for k := range s.keys {
+		if strings.HasPrefix(k, prefix) {
+			results = append(results, k)
+		}
+	}
+	return results
 }

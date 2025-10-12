@@ -2,9 +2,7 @@ package main
 
 import (
 	"DFS/p2p"
-	"bytes"
 	"fmt"
-	"io"
 	"time"
 )
 
@@ -105,44 +103,54 @@ func main() {
 	go func() {
 		s3.Start()
 	}()
-
+	//
 	time.Sleep(1 * time.Second)
 	key := "test_key"
+	//
+	////leaveRoom(roomCode, "127.0.0.1:4000", s2)
+	//
+	//data := bytes.NewReader([]byte("test data"))
+	//s3.Store("test_key", data)
+	//time.Sleep(100 * time.Millisecond)
+	//
+	//if err := s3.store.Delete(s3.Ops.ID, key); err != nil {
+	//	fmt.Printf("Failed to delete from store: %v", err)
+	//	return
+	//}
+	//
+	//r, err := s3.Get(key)
+	//if err != nil {
+	//	fmt.Printf("Failed to read from store: %v", err)
+	//	return
+	//}
+	//
+	//b, err := io.ReadAll(r)
+	//if err != nil {
+	//	fmt.Printf("Failed to read from io.Reader: %v", err)
+	//	return
+	//}
+	//fmt.Println(string(b))
+	//err = s3.DeleteFromEveryServer(key)
+	//if err != nil {
+	//	fmt.Printf("Failed to delete from every server: %v", err)
+	//	return
+	//}
+	//time.Sleep(1 * time.Second)
 
-	//leaveRoom(roomCode, "127.0.0.1:4000", s2)
+	s3.StoreFolder(key, "./p2p")
 
-	data := bytes.NewReader([]byte("test data"))
-	s3.Store("test_key", data)
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 
-	if err := s3.store.Delete(s3.Ops.ID, key); err != nil {
-		fmt.Printf("Failed to delete from store: %v", err)
-		return
-	}
-
-	r, err := s3.Get(key)
+	err := s3.GetFolder(key, "./downloaded_p2p")
 	if err != nil {
 		fmt.Printf("Failed to read from store: %v", err)
 		return
 	}
 
-	b, err := io.ReadAll(r)
-	if err != nil {
-		fmt.Printf("Failed to read from io.Reader: %v", err)
-		return
-	}
-	fmt.Println(string(b))
-	err = s3.DeleteFromEveryServer(key)
-	if err != nil {
-		fmt.Printf("Failed to delete from every server: %v", err)
-		return
-	}
-	time.Sleep(1 * time.Second)
+	leaveRoom(roomCode, "127.0.0.1:5000", s3)
 
-	s3.Stop()
-	time.Sleep(100 * time.Millisecond)
-	//s2.Stop()
-	time.Sleep(100 * time.Millisecond)
-	s1.Stop()
+	leaveRoom(roomCode, "127.0.0.1:4000", s2)
+
+	leaveRoom(roomCode, "127.0.0.1:3000", s1)
 
 }
