@@ -4,6 +4,8 @@ import (
 	"DFS/gossip"
 	"DFS/p2p"
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"encoding/binary"
 	"encoding/gob"
 	"fmt"
@@ -166,7 +168,7 @@ func (s *FileServer) broadcast(msg *Message) error {
 
 func (s *FileServer) Get(key string) (io.Reader, error) {
 	if s.store.Has(s.Ops.ID, key) {
-		_, r, err := s.store.Read(s.Ops.ID, key)
+		r, err := s.store.ReadDecrypt(s.Ops.EncKey, s.Ops.ID, key)
 		return r, err
 	}
 
@@ -622,4 +624,32 @@ func (s *Store) ListKeysByPrefix(prefix string) []string {
 		}
 	}
 	return results
+}
+
+func (s *Store) ReadDecrypt(encKey []byte, id, key string) (io.Reader, error) {
+	_, r, err := s.Read(id, key)
+	if err != nil {
+		return nil, err
+	}
+
+	block, err := aes.NewCipher(encKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// Read IV from start of file
+	iv := make([]byte, block.BlockSize())
+	if _, err := io.ReadFull(r, iv); err != nil {
+		return nil, fmt.Errorf("failed to read IV: %w", err)
+	}
+
+	// Create CTR stream reader
+	stream := cipher.NewCTR(block, iv)
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		writer := &cipher.StreamWriter{S: stream, W: pw}
+		io.Copy(writer, r)
+	}()
+	return pr, nil
 }
