@@ -29,13 +29,14 @@ type FileServerOpts struct {
 }
 
 type FileServer struct {
-	Ops        FileServerOpts
-	peers      map[string]p2p.Peer
-	pending    map[string]p2p.Peer
-	peerLock   sync.Mutex // to protect access to peers map
-	store      *Store
-	quitch     chan struct{} // channel to signal shutdown
-	membership *gossip.Membership
+	Ops            FileServerOpts
+	peers          map[string]p2p.Peer
+	pending        map[string]p2p.Peer
+	peerLock       sync.Mutex // to protect access to peers map
+	store          *Store
+	quitch         chan struct{} // channel to signal shutdown
+	membership     *gossip.Membership
+	listResponseCh chan MessageListFilesResponse
 }
 
 func (s *FileServer) AddPeer(peerID string, p p2p.Peer) {
@@ -71,11 +72,12 @@ func newFileServer(ops FileServerOpts) *FileServer {
 	}
 
 	s := &FileServer{
-		Ops:      ops,
-		store:    store,
-		quitch:   make(chan struct{}),
-		peers:    make(map[string]p2p.Peer),
-		peerLock: sync.Mutex{},
+		Ops:            ops,
+		store:          store,
+		quitch:         make(chan struct{}),
+		peers:          make(map[string]p2p.Peer),
+		peerLock:       sync.Mutex{},
+		listResponseCh: make(chan MessageListFilesResponse, 10),
 	}
 
 	if tcpT, ok := ops.Transport.(*p2p.TCPTransport); ok {
@@ -142,10 +144,22 @@ type MessageDeleteFile struct {
 	ID  string
 }
 
+type MessageListFiles struct {
+	BaseKey string
+	ID      string
+}
+
+type MessageListFilesResponse struct {
+	BaseKey string
+	Keys    []string
+}
+
 func init() {
 	gob.Register(MessageStoreFile{})
 	gob.Register(MessageGetFile{})
 	gob.Register(MessageDeleteFile{})
+	gob.Register(MessageListFiles{})
+	gob.Register(MessageListFilesResponse{})
 }
 
 func (s *FileServer) broadcast(msg *Message) error {
@@ -272,21 +286,39 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 }
 
 func (s *FileServer) GetFolder(baseKey, destPath string) error {
-	// 1️⃣ List all keys with the prefix
+	// 1️⃣ Try listing locally
 	keys := s.store.ListKeysByPrefix(baseKey)
 
+	// 2️⃣ If local files missing, ask peers for the list
 	if len(keys) == 0 {
-		return fmt.Errorf("no files found with prefix %s", baseKey)
+		fmt.Printf("⚠️ No local files for prefix %s — requesting from peers...\n", baseKey)
+
+		msg := Message{
+			Payload: MessageListFiles{
+				BaseKey: baseKey,
+				ID:      s.Ops.ID,
+			},
+		}
+
+		if err := s.broadcast(&msg); err != nil {
+			return fmt.Errorf("failed to broadcast ListFiles: %v", err)
+		}
+
+		// Wait for peers to respond (implement MessageListFilesResponse handler)
+		keys = s.awaitKeysFromPeers(baseKey)
+		if len(keys) == 0 {
+			return fmt.Errorf("no files found with prefix %s (local or remote)", baseKey)
+		}
 	}
 
-	// 2️⃣ Fetch each file
+	// 3️⃣ Fetch each file — now Get() handles local/network logic
 	for _, key := range keys {
 		r, err := s.Get(key)
 		if err != nil {
 			return fmt.Errorf("failed to get key %s: %w", key, err)
 		}
 
-		// Compute relative path from baseKey
+		// Compute local destination path
 		relPath := strings.TrimPrefix(key, baseKey)
 		relPath = strings.TrimPrefix(relPath, "/")
 		fullPath := filepath.Join(destPath, relPath)
@@ -562,11 +594,37 @@ func (s *FileServer) handleMessage(from string, msg *Message) error {
 		return s.handleMessageGetFile(from, payload)
 	case MessageDeleteFile:
 		return s.handleMessageDeleteFile(from, payload)
+	case MessageListFiles:
+		keys := s.store.ListKeysByPrefix(payload.BaseKey)
+		resp := Message{
+			Payload: MessageListFilesResponse{
+				BaseKey: payload.BaseKey,
+				Keys:    keys,
+			},
+		}
+
+		// Send response back to sender peer (find by ID)
+		s.peerLock.Lock()
+		peer, ok := s.peers[from]
+		s.peerLock.Unlock()
+		if ok {
+			peer.Send([]byte{p2p.IncomingMessage})
+			buf := new(bytes.Buffer)
+			if err := gob.NewEncoder(buf).Encode(&resp); err != nil {
+				return fmt.Errorf("failed to encode response: %v", err)
+			}
+			peer.Send(buf.Bytes())
+		}
+
+	case MessageListFilesResponse:
+		// ✅ Peer responded with file list — forward to awaitKeysFromPeers
+		s.listResponseCh <- payload
+
 	default:
 		log.Printf("Unknown message type: %T", payload)
 		return nil
 	}
-
+	return nil
 }
 
 func (s *FileServer) handleMessageStorageFile(from string, msg MessageStoreFile) error {
@@ -577,7 +635,7 @@ func (s *FileServer) handleMessageStorageFile(from string, msg MessageStoreFile)
 		return fmt.Errorf("unknown peer: %s", from)
 	}
 
-	n, err := s.store.Write(msg.ID, msg.Key, io.LimitReader(peer, int64(msg.Size)))
+	n, err := s.store.Write(s.Ops.ID, msg.Key, io.LimitReader(peer, int64(msg.Size)))
 	if err != nil {
 		log.Printf("Failed to write to store: %v", err)
 		return err
@@ -617,13 +675,13 @@ func (s *FileServer) Stop() {
 
 // ListKeysByPrefix simply filters the in-memory keys
 func (s *Store) ListKeysByPrefix(prefix string) []string {
-	var results []string
+	var result []string
 	for k := range s.keys {
 		if strings.HasPrefix(k, prefix) {
-			results = append(results, k)
+			result = append(result, k)
 		}
 	}
-	return results
+	return result
 }
 
 func (s *Store) ReadDecrypt(encKey []byte, id, key string) (io.Reader, error) {
@@ -652,4 +710,20 @@ func (s *Store) ReadDecrypt(encKey []byte, id, key string) (io.Reader, error) {
 		io.Copy(writer, r)
 	}()
 	return pr, nil
+}
+
+func (s *FileServer) awaitKeysFromPeers(baseKey string) []string {
+	var allKeys []string
+	timeout := time.After(5 * time.Second)
+
+	for {
+		select {
+		case resp := <-s.listResponseCh:
+			if resp.BaseKey == baseKey {
+				allKeys = append(allKeys, resp.Keys...)
+			}
+		case <-timeout:
+			return allKeys
+		}
+	}
 }

@@ -93,7 +93,6 @@ func main() {
 
 	go func() {
 		s1.Start()
-
 	}()
 
 	go func() {
@@ -141,7 +140,7 @@ func main() {
 
 	time.Sleep(1 * time.Second)
 
-	err := s3.GetFolder(key, "./downloaded_p2p")
+	err := s2.GetFolder(key, "./downloaded_p2p")
 	if err != nil {
 		fmt.Printf("Failed to read from store: %v", err)
 		return

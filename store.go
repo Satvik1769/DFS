@@ -3,11 +3,11 @@ package main
 import (
 	"crypto/sha1"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -23,7 +23,7 @@ type StoreOps struct {
 
 type Store struct {
 	StoreOps
-	keys map[string]struct{}
+	keys map[string]string
 }
 
 type PathKey struct {
@@ -53,11 +53,11 @@ func NewStore(opts StoreOps) *Store {
 	}
 }
 
-func (s *Store) AddKey(key string) {
+func (s *Store) AddKey(logicalKey string, pathName PathKey) {
 	if s.keys == nil {
-		s.keys = make(map[string]struct{})
+		s.keys = make(map[string]string)
 	}
-	s.keys[key] = struct{}{}
+	s.keys[logicalKey] = pathName.FullPathName()
 }
 
 func CASPathTransformFunc(key string) PathKey {
@@ -71,6 +71,7 @@ func CASPathTransformFunc(key string) PathKey {
 		from, to := i*blockSize, (i+1)*blockSize
 		paths[i] = hashStr[from:to]
 	}
+
 	return PathKey{
 		Pathname: strings.Join(paths, "/"),
 		Filename: hashStr,
@@ -92,10 +93,14 @@ func (p PathKey) FullPathName() string {
 func (s *Store) PathTransformFunc(key string) PathKey {
 	return s.StoreOps.PathTransformFunc(key)
 }
-func (s *Store) readStream(id string, key string) (int64, io.ReadCloser, error) {
-	pathName := s.PathTransformFunc(key)
-	fullPathWithRoot := s.Root + "/" + id + "/" + pathName.FullPathName()
 
+func (s *Store) readStream(id, key string) (int64, io.ReadCloser, error) {
+	actualPath, ok := s.keys[key]
+	if !ok {
+		return 0, nil, fmt.Errorf("no file found for key %s", key)
+	}
+
+	fullPathWithRoot := filepath.Join(s.Root, id, actualPath)
 	file, err := os.Open(fullPathWithRoot)
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to open file: %v", err)
@@ -108,7 +113,6 @@ func (s *Store) readStream(id string, key string) (int64, io.ReadCloser, error) 
 
 	return fi.Size(), file, nil
 }
-
 func (s *Store) Read(id string, key string) (int64, io.Reader, error) {
 	return s.readStream(id, key)
 }
@@ -131,12 +135,12 @@ func (s *Store) Clear() error {
 	return os.RemoveAll(s.Root)
 }
 
-func (s *Store) Has(id string, Key string) bool {
-	pathKey := s.PathTransformFunc(Key)
-	fullPathWithRoot := s.Root + "/" + id + "/" + pathKey.FullPathName()
-
-	_, err := os.Stat(fullPathWithRoot)
-	return !errors.Is(err, os.ErrNotExist)
+func (s *Store) Has(id, key string) bool {
+	if s.keys == nil {
+		return false
+	}
+	_, ok := s.keys[key]
+	return ok
 }
 
 func (s *Store) Write(id string, key string, r io.Reader) (int64, error) {
@@ -162,7 +166,6 @@ func (s *Store) writeStream(id string, key string, r io.Reader) (int64, error) {
 	}
 	defer f.Close()
 
-	s.AddKey(key)
 	return io.Copy(f, r)
 }
 
@@ -175,6 +178,7 @@ func (s *Store) openFileForWriting(id string, key string) (*os.File, error) {
 
 	fullPath := pathName.FullPathName()
 
+	s.AddKey(key, pathName)
 	fullPathWithRoot := s.Root + "/" + id + "/" + fullPath
 	return os.Create(fullPathWithRoot)
 

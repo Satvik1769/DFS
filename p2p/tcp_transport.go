@@ -232,7 +232,7 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 		}
 
 		t.rpcch <- msg
-		fmt.Printf("Received message: %v \n", msg)
+		fmt.Printf("Received message 2: %v \n", msg)
 	}
 
 }
