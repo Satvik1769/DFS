@@ -595,27 +595,7 @@ func (s *FileServer) handleMessage(from string, msg *Message) error {
 	case MessageDeleteFile:
 		return s.handleMessageDeleteFile(from, payload)
 	case MessageListFiles:
-		keys := s.store.ListKeysByPrefix(payload.BaseKey)
-		resp := Message{
-			Payload: MessageListFilesResponse{
-				BaseKey: payload.BaseKey,
-				Keys:    keys,
-			},
-		}
-
-		// Send response back to sender peer (find by ID)
-		s.peerLock.Lock()
-		peer, ok := s.peers[from]
-		s.peerLock.Unlock()
-		if ok {
-			peer.Send([]byte{p2p.IncomingMessage})
-			buf := new(bytes.Buffer)
-			if err := gob.NewEncoder(buf).Encode(&resp); err != nil {
-				return fmt.Errorf("failed to encode response: %v", err)
-			}
-			peer.Send(buf.Bytes())
-		}
-
+		return s.handleMessageListFile(from, payload)
 	case MessageListFilesResponse:
 		// ✅ Peer responded with file list — forward to awaitKeysFromPeers
 		s.listResponseCh <- payload
@@ -726,4 +706,28 @@ func (s *FileServer) awaitKeysFromPeers(baseKey string) []string {
 			return allKeys
 		}
 	}
+}
+
+func (s *FileServer) handleMessageListFile(from string, msg MessageListFiles) error {
+	keys := s.store.ListKeysByPrefix(msg.BaseKey)
+	resp := Message{
+		Payload: MessageListFilesResponse{
+			BaseKey: msg.BaseKey,
+			Keys:    keys,
+		},
+	}
+
+	// Send response back to sender peer (find by ID)
+	s.peerLock.Lock()
+	peer, ok := s.peers[from]
+	s.peerLock.Unlock()
+	if ok {
+		peer.Send([]byte{p2p.IncomingMessage})
+		buf := new(bytes.Buffer)
+		if err := gob.NewEncoder(buf).Encode(&resp); err != nil {
+			return fmt.Errorf("failed to encode response: %v", err)
+		}
+		peer.Send(buf.Bytes())
+	}
+	return nil
 }
