@@ -367,43 +367,35 @@ func (s *FileServer) DeleteFromEveryServer(key string) error {
 func (s *FileServer) Store(key string, r io.Reader) error {
 	fileBuffer := new(bytes.Buffer)
 	tee := io.TeeReader(r, fileBuffer)
-	size, err := s.store.Write(s.Ops.ID, key, tee)
+
+	// 1️⃣ Encrypt locally
+	size, err := s.store.WriteEncrypt(s.Ops.EncKey, s.Ops.ID, key, tee)
 	if err != nil {
-		log.Printf("Failed to write to store: %v", err)
 		return err
 	}
-	fmt.Printf("Stored %d bytes for key %s\n", size, key)
+	fmt.Printf("Stored %d bytes locally for key %s\n", size, key)
 
+	// 2️⃣ Broadcast file info
 	msg := Message{
 		Payload: MessageStoreFile{
 			Key:  key,
-			Size: size + 16,
+			Size: int64(fileBuffer.Len()), // plaintext size
 			ID:   s.Ops.ID,
 		},
 	}
-
 	if err := s.broadcast(&msg); err != nil {
-		log.Printf("Failed to broadcast message: %v", err)
 		return err
 	}
 
-	time.Sleep(2 * time.Millisecond)
-
-	// stream the file to all peers
-	peers := []io.Writer{}
+	// 3️⃣ Stream plaintext to peers
 	for _, peer := range s.peers {
-		peers = append(peers, peer)
+		go func(p p2p.Peer) {
+			p.Send([]byte{p2p.IncomingStream})
+			binary.Write(p, binary.LittleEndian, int64(fileBuffer.Len()))
+			io.Copy(p, bytes.NewReader(fileBuffer.Bytes()))
+		}(peer)
 	}
 
-	mw := io.MultiWriter(peers...)
-	mw.Write([]byte{p2p.IncomingStream})
-	n, err := copyEncrypt(s.Ops.EncKey, fileBuffer, mw)
-	if err != nil {
-		log.Printf("Failed to copy file to peers: %v", err)
-		return err
-	}
-
-	fmt.Printf(" %s Received and Written %d bytes to peers\n", s.Ops.Transport.Addr(), n)
 	return nil
 }
 
@@ -608,24 +600,20 @@ func (s *FileServer) handleMessage(from string, msg *Message) error {
 }
 
 func (s *FileServer) handleMessageStorageFile(from string, msg MessageStoreFile) error {
-	fmt.Printf("%+v\n", msg)
 	peer, ok := s.peers[from]
 	if !ok {
-		log.Printf("Unknown peer: %s", from)
 		return fmt.Errorf("unknown peer: %s", from)
 	}
 
-	n, err := s.store.Write(s.Ops.ID, msg.Key, io.LimitReader(peer, int64(msg.Size)))
+	// Read exactly msg.Size bytes from network, store encrypted locally
+	n, err := s.store.WriteEncrypt(s.Ops.EncKey, s.Ops.ID, msg.Key, io.LimitReader(peer, int64(msg.Size)))
 	if err != nil {
-		log.Printf("Failed to write to store: %v", err)
 		return err
 	}
-	fmt.Printf("Stored %d bytes for key %s from peer %s\n", n, msg.Key, s.Ops.Transport.Addr())
+	fmt.Printf("Stored %d bytes for key %s from peer %s\n", n, msg.Key, from)
 
 	peer.CloseStream()
-
 	return nil
-
 }
 
 func (s *FileServer) handleMessageDeleteFile(from string, msg MessageDeleteFile) error {
@@ -730,4 +718,17 @@ func (s *FileServer) handleMessageListFile(from string, msg MessageListFiles) er
 		peer.Send(buf.Bytes())
 	}
 	return nil
+}
+
+func (s *Store) WriteEncrypt(encKey []byte, id string, key string, r io.Reader) (int64, error) {
+	// Open the file for writing
+	f, err := s.openFileForWriting(id, key)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	// Perform encryption and write to file
+	n, err := copyEncrypt(encKey, r, f)
+	return int64(n), err
 }
