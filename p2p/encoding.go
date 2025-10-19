@@ -2,7 +2,6 @@ package p2p
 
 import (
 	"encoding/gob"
-	"fmt"
 	"io"
 )
 
@@ -25,20 +24,22 @@ func (d DefaultDecoder) Decode(r io.Reader, msg *RPC) error {
 		return err
 	}
 
-	stream := peekBuff[0] == IncomingStream;
+	stream := peekBuff[0] == IncomingStream
 
-	// we will not decode incoming streams here 
-	if(stream){
+	// we will not decode incoming streams here
+	if stream {
 		msg.Stream = true
 		return nil
 	}
 
-	buf := make([]byte, 1028) 
-	n, err := r.Read(buf)     
+	buf := make([]byte, 1028)
+	n, err := r.Read(buf)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("NOPDecoder read %d bytes: %s\n", n, buf[:n])
-	msg.Payload = buf[:n]  
+
+	// this also writes raw data in terminal, uncomment for debugging
+	//fmt.Printf("NOPDecoder read %d bytes: %s\n", n, buf[:n])
+	msg.Payload = buf[:n]
 	return nil
 }
