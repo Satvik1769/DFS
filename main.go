@@ -3,6 +3,8 @@ package main
 import (
 	"DFS/p2p"
 	"fmt"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -73,6 +75,9 @@ func makeServer(listenAddr string, nodes ...string) *FileServer {
 		HandshakeFunc: p2p.NOPHandTransport,
 		Decoder:       p2p.DefaultDecoder{},
 	})
+	if runtime.GOOS == "windows" {
+		listenAddr = strings.ReplaceAll(listenAddr, ":", "_")
+	}
 	fileServerOpts := FileServerOpts{
 		EncKey:            newEncryptionKey(),
 		StorageRoot:       listenAddr + "_network",
