@@ -50,6 +50,7 @@ func NewStore(opts StoreOps) *Store {
 
 	return &Store{
 		StoreOps: opts,
+		keys:     make(map[string]string),
 	}
 }
 
