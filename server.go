@@ -154,12 +154,25 @@ type MessageListFilesResponse struct {
 	Keys    []string
 }
 
+type MessageRequestFile struct {
+	Key string
+	ID  string
+}
+
+type MessageFileData struct {
+	Key  string
+	Data []byte
+	ID   string
+}
+
 func init() {
 	gob.Register(MessageStoreFile{})
 	gob.Register(MessageGetFile{})
 	gob.Register(MessageDeleteFile{})
 	gob.Register(MessageListFiles{})
 	gob.Register(MessageListFilesResponse{})
+	gob.Register(MessageRequestFile{})
+	gob.Register(MessageFileData{})
 }
 
 func (s *FileServer) broadcast(msg *Message) error {
@@ -375,28 +388,15 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 	}
 	fmt.Printf("Stored %d bytes locally for key %s\n", size, key)
 
-	// 2️⃣ Broadcast file info
+	// 2️⃣ Broadcast file announcement (no streaming yet)
 	msg := Message{
 		Payload: MessageStoreFile{
 			Key:  key,
-			Size: int64(fileBuffer.Len()), // plaintext size
+			Size: int64(fileBuffer.Len()),
 			ID:   s.Ops.ID,
 		},
 	}
-	if err := s.broadcast(&msg); err != nil {
-		return err
-	}
-
-	// 3️⃣ Stream plaintext to peers
-	for _, peer := range s.peers {
-		go func(p p2p.Peer) {
-			p.Send([]byte{p2p.IncomingStream})
-			binary.Write(p, binary.LittleEndian, int64(fileBuffer.Len()))
-			io.Copy(p, bytes.NewReader(fileBuffer.Bytes()))
-		}(peer)
-	}
-
-	return nil
+	return s.broadcast(&msg)
 }
 
 func (s *FileServer) StoreFolder(baseKey, folderPath string) error {
@@ -522,7 +522,7 @@ func (s *FileServer) loop() {
 			payloadBytes := rpc.Payload
 			if err := gob.NewDecoder(bytes.NewReader(payloadBytes)).Decode(&msg); err != nil {
 				log.Printf("Failed to decode message: %v", err)
-				return
+				continue // Don't crash, just skip bad messages
 			}
 
 			if err := s.handleMessage(rpc.From, &msg); err != nil {
@@ -589,9 +589,11 @@ func (s *FileServer) handleMessage(from string, msg *Message) error {
 	case MessageListFiles:
 		return s.handleMessageListFile(from, payload)
 	case MessageListFilesResponse:
-		// ✅ Peer responded with file list — forward to awaitKeysFromPeers
 		s.listResponseCh <- payload
-
+	case MessageRequestFile:
+		return s.handleMessageRequestFile(from, payload)
+	case MessageFileData:
+		return s.handleMessageFileData(from, payload)
 	default:
 		log.Printf("Unknown message type: %T", payload)
 		return nil
@@ -605,15 +607,21 @@ func (s *FileServer) handleMessageStorageFile(from string, msg MessageStoreFile)
 		return fmt.Errorf("unknown peer: %s", from)
 	}
 
-	// Read exactly msg.Size bytes from network, store encrypted locally
-	n, err := s.store.WriteEncrypt(s.Ops.EncKey, s.Ops.ID, msg.Key, io.LimitReader(peer, int64(msg.Size)))
-	if err != nil {
+	// Send request for the file
+	request := Message{
+		Payload: MessageRequestFile{
+			Key: msg.Key,
+			ID:  msg.ID,
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	if err := gob.NewEncoder(buf).Encode(&request); err != nil {
 		return err
 	}
-	fmt.Printf("Stored %d bytes for key %s from peer %s\n", n, msg.Key, from)
 
-	peer.CloseStream()
-	return nil
+	peer.Send([]byte{p2p.IncomingMessage})
+	return peer.Send(buf.Bytes())
 }
 
 func (s *FileServer) handleMessageDeleteFile(from string, msg MessageDeleteFile) error {
@@ -682,18 +690,22 @@ func (s *Store) ReadDecrypt(encKey []byte, id, key string) (io.Reader, error) {
 
 func (s *FileServer) awaitKeysFromPeers(baseKey string) []string {
 	var allKeys []string
-	timeout := time.After(5 * time.Second)
+	timeout := time.After(2 * time.Second)
+	responseCount := 0
+	expectedResponses := len(s.peers)
 
-	for {
+	for responseCount < expectedResponses {
 		select {
 		case resp := <-s.listResponseCh:
 			if resp.BaseKey == baseKey {
 				allKeys = append(allKeys, resp.Keys...)
 			}
+			responseCount++
 		case <-timeout:
 			return allKeys
 		}
 	}
+	return allKeys
 }
 
 func (s *FileServer) handleMessageListFile(from string, msg MessageListFiles) error {
@@ -731,4 +743,58 @@ func (s *Store) WriteEncrypt(encKey []byte, id string, key string, r io.Reader) 
 	// Perform encryption and write to file
 	n, err := copyEncrypt(encKey, r, f)
 	return int64(n), err
+}
+
+func (s *FileServer) handleMessageRequestFile(from string, msg MessageRequestFile) error {
+	peer, ok := s.peers[from]
+	if !ok {
+		return fmt.Errorf("unknown peer: %s", from)
+	}
+
+	if !s.store.Has(msg.ID, msg.Key) {
+		return fmt.Errorf("file %s not found", msg.Key)
+	}
+
+	// Read and decrypt the file
+	r, err := s.store.ReadDecrypt(s.Ops.EncKey, msg.ID, msg.Key)
+	if err != nil {
+		return err
+	}
+
+	// Read all decrypted data
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+
+	// Send file data as message
+	response := Message{
+		Payload: MessageFileData{
+			Key:  msg.Key,
+			Data: data,
+			ID:   msg.ID,
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	if err := gob.NewEncoder(buf).Encode(&response); err != nil {
+		return err
+	}
+
+	peer.Send([]byte{p2p.IncomingMessage})
+	err = peer.Send(buf.Bytes())
+	if err == nil {
+		fmt.Printf("Sent %d bytes of %s to requesting peer %s\n", len(data), msg.Key, from)
+	}
+	return err
+}
+func (s *FileServer) handleMessageFileData(from string, msg MessageFileData) error {
+	// Store the received file data using receiver's own ID
+	n, err := s.store.WriteEncrypt(s.Ops.EncKey, s.Ops.ID, msg.Key, bytes.NewReader(msg.Data))
+	if err != nil {
+		return fmt.Errorf("failed to store file %s: %v", msg.Key, err)
+	}
+
+	fmt.Printf("Received and stored %d bytes for key %s from peer %s\n", n, msg.Key, from)
+	return nil
 }
