@@ -165,6 +165,18 @@ type MessageFileData struct {
 	ID   string
 }
 
+type MessageDeleteFromServer struct {
+	Key      string
+	TargetID string // ID of the server to delete from
+	ID       string // ID of the requester
+}
+
+type MessageDeleteFolderFromServer struct {
+	BaseKey  string
+	TargetID string // ID of the server to delete from
+	ID       string // ID of the requester
+}
+
 func init() {
 	gob.Register(MessageStoreFile{})
 	gob.Register(MessageGetFile{})
@@ -173,6 +185,8 @@ func init() {
 	gob.Register(MessageListFilesResponse{})
 	gob.Register(MessageRequestFile{})
 	gob.Register(MessageFileData{})
+	gob.Register(MessageDeleteFromServer{})
+	gob.Register(MessageDeleteFolderFromServer{})
 }
 
 func (s *FileServer) broadcast(msg *Message) error {
@@ -388,6 +402,79 @@ func (s *FileServer) DeleteFromEveryServer(key string) error {
 	return nil
 }
 
+// DeleteFileFromServer deletes a specific file from a target server
+func (s *FileServer) DeleteFileFromServer(key, targetServerID string) error {
+	msg := Message{
+		Payload: MessageDeleteFromServer{
+			Key:      key,
+			TargetID: targetServerID,
+			ID:       s.Ops.ID,
+		},
+	}
+
+	if err := s.broadcast(&msg); err != nil {
+		log.Printf("Failed to broadcast delete message: %v", err)
+		return err
+	}
+
+	fmt.Printf("Sent delete request for file %s to server %s\n", key, targetServerID)
+	return nil
+}
+
+// DeleteFolderFromServer deletes all files with a specific prefix from a target server
+func (s *FileServer) DeleteFolderFromServer(baseKey, targetServerID string) error {
+	msg := Message{
+		Payload: MessageDeleteFolderFromServer{
+			BaseKey:  baseKey,
+			TargetID: targetServerID,
+			ID:       s.Ops.ID,
+		},
+	}
+
+	if err := s.broadcast(&msg); err != nil {
+		log.Printf("Failed to broadcast delete folder message: %v", err)
+		return err
+	}
+
+	fmt.Printf("Sent delete folder request for %s to server %s\n", baseKey, targetServerID)
+	return nil
+}
+
+// DeleteLocalFile deletes a file from the local server only
+func (s *FileServer) DeleteLocalFile(key string) error {
+	if !s.store.Has(s.Ops.ID, key) {
+		return fmt.Errorf("file %s does not exist locally", key)
+	}
+
+	if err := s.store.Delete(s.Ops.ID, key); err != nil {
+		return fmt.Errorf("failed to delete file %s: %v", key, err)
+	}
+
+	fmt.Printf("Deleted file %s from local server\n", key)
+	return nil
+}
+
+// DeleteLocalFolder deletes all files with a specific prefix from the local server only
+func (s *FileServer) DeleteLocalFolder(baseKey string) error {
+	keys := s.store.ListKeysByPrefix(baseKey)
+	if len(keys) == 0 {
+		return fmt.Errorf("no files found with prefix %s", baseKey)
+	}
+
+	var deletedCount int
+	for _, key := range keys {
+		if err := s.store.Delete(s.Ops.ID, key); err != nil {
+			log.Printf("Failed to delete file %s: %v", key, err)
+			continue
+		}
+		deletedCount++
+		fmt.Printf("Deleted file %s from local server\n", key)
+	}
+
+	fmt.Printf("Deleted %d files with prefix %s from local server\n", deletedCount, baseKey)
+	return nil
+}
+
 func (s *FileServer) Store(key string, r io.Reader) error {
 	fileBuffer := new(bytes.Buffer)
 	tee := io.TeeReader(r, fileBuffer)
@@ -597,6 +684,10 @@ func (s *FileServer) handleMessage(from string, msg *Message) error {
 		return s.handleMessageGetFile(from, payload)
 	case MessageDeleteFile:
 		return s.handleMessageDeleteFile(from, payload)
+	case MessageDeleteFromServer:
+		return s.handleMessageDeleteFromServer(from, payload)
+	case MessageDeleteFolderFromServer:
+		return s.handleMessageDeleteFolderFromServer(from, payload)
 	case MessageListFiles:
 		return s.handleMessageListFile(from, payload)
 	case MessageListFilesResponse:
@@ -833,5 +924,53 @@ func (s *FileServer) handleMessageFileData(from string, msg MessageFileData) err
 	}
 
 	fmt.Printf("Received and stored %d bytes for key %s from peer %s\n", n, msg.Key, from)
+	return nil
+}
+
+func (s *FileServer) handleMessageDeleteFromServer(from string, msg MessageDeleteFromServer) error {
+	// Check if this server is the target
+	if msg.TargetID != s.Ops.ID {
+		// Not for this server, ignore
+		return nil
+	}
+
+	if !s.store.Has(s.Ops.ID, msg.Key) {
+		fmt.Printf("File %s not found on server %s\n", msg.Key, s.Ops.ID)
+		return nil
+	}
+
+	if err := s.store.Delete(s.Ops.ID, msg.Key); err != nil {
+		fmt.Printf("Failed to delete file %s from server %s: %v\n", msg.Key, s.Ops.ID, err)
+		return err
+	}
+
+	fmt.Printf("Deleted file %s from server %s (requested by %s)\n", msg.Key, s.Ops.ID, from)
+	return nil
+}
+
+func (s *FileServer) handleMessageDeleteFolderFromServer(from string, msg MessageDeleteFolderFromServer) error {
+	// Check if this server is the target
+	if msg.TargetID != s.Ops.ID {
+		// Not for this server, ignore
+		return nil
+	}
+
+	keys := s.store.ListKeysByPrefix(msg.BaseKey)
+	if len(keys) == 0 {
+		fmt.Printf("No files found with prefix %s on server %s\n", msg.BaseKey, s.Ops.ID)
+		return nil
+	}
+
+	var deletedCount int
+	for _, key := range keys {
+		if err := s.store.Delete(s.Ops.ID, key); err != nil {
+			log.Printf("Failed to delete file %s from server %s: %v", key, s.Ops.ID, err)
+			continue
+		}
+		deletedCount++
+		fmt.Printf("Deleted file %s from server %s\n", key, s.Ops.ID)
+	}
+
+	fmt.Printf("Deleted %d files with prefix %s from server %s (requested by %s)\n", deletedCount, msg.BaseKey, s.Ops.ID, from)
 	return nil
 }

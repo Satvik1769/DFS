@@ -146,11 +146,37 @@ func main() {
 
 	time.Sleep(1 * time.Second)
 
+	s3.DeleteFolderFromServer(key, s3.Ops.ID)
+
 	err := s2.GetFolder(key, "./downloaded_p2p")
 	if err != nil {
 		fmt.Printf("Failed to read from store: %v", err)
 		return
 	}
+
+	// Example: Delete a specific file from server s1 (127.0.0.1:3000)
+	// err = s2.DeleteFileFromServer("test_key/transport.go", s1.Ops.ID)
+	// if err != nil {
+	//     fmt.Printf("Failed to delete file from server: %v", err)
+	// }
+
+	// Example: Delete entire folder from server s3 (127.0.0.1:5000)
+	// err = s1.DeleteFolderFromServer("test_key", s3.Ops.ID)
+	// if err != nil {
+	//     fmt.Printf("Failed to delete folder from server: %v", err)
+	// }
+
+	// Example: Delete local file only
+	// err = s2.DeleteLocalFile("test_key/encoding.go")
+	// if err != nil {
+	//     fmt.Printf("Failed to delete local file: %v", err)
+	// }
+
+	// Example: Delete local folder only
+	// err = s1.DeleteLocalFolder("test_key")
+	// if err != nil {
+	//     fmt.Printf("Failed to delete local folder: %v", err)
+	// }
 
 	leaveRoom(roomCode, "127.0.0.1:5000", s3)
 
