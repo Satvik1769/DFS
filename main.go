@@ -73,7 +73,8 @@ func makeServer(listenAddr string, nodes ...string) *FileServer {
 	tcpTransport := p2p.NewTcpTransport(p2p.TCPTransportOps{
 		ListenAddr:    listenAddr,
 		HandshakeFunc: p2p.NOPHandTransport,
-		Decoder:       p2p.DefaultDecoder{},
+		Decoder:       p2p.GOBDecoder{},
+		Encoder:       p2p.GOBEncoder{},
 	})
 	if runtime.GOOS == "windows" {
 		listenAddr = strings.ReplaceAll(listenAddr, ":", "_")

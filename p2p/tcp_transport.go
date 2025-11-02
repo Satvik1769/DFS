@@ -12,6 +12,7 @@ type TCPTransportOps struct {
 	ListenAddr    string
 	HandshakeFunc HandshakeFunc
 	Decoder       Decoder
+	Encoder       Encoder
 	OnPeer        func(Peer) error
 }
 
@@ -136,6 +137,14 @@ func (t *TCPTransport) ListenAndAccept() error {
 
 func (t *TCPTransport) Consume() <-chan RPC {
 	return t.rpcch
+}
+
+func (t *TCPTransport) SendRPC(peer Peer, rpc *RPC) error {
+	if t.Encoder != nil {
+		return t.Encoder.Encode(peer, rpc)
+	}
+	// Fallback to raw send
+	return peer.Send(rpc.Payload)
 }
 
 func (t *TCPTransport) startAcceptLoop() {

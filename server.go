@@ -176,16 +176,27 @@ func init() {
 }
 
 func (s *FileServer) broadcast(msg *Message) error {
-	buf := new(bytes.Buffer)
+	rpc := &p2p.RPC{
+		Payload: nil, // Will be set by GOBEncoder
+		Stream:  false,
+	}
 
-	if err := gob.NewEncoder(buf).Encode(&msg); err != nil {
+	// Encode the message into RPC using gob
+	buf := new(bytes.Buffer)
+	if err := gob.NewEncoder(buf).Encode(msg); err != nil {
 		log.Printf("Failed to encode message: %v", err)
 		return err
 	}
+	rpc.Payload = buf.Bytes()
+
+	// Get transport reference
+	tcpTransport, ok := s.Ops.Transport.(*p2p.TCPTransport)
+	if !ok {
+		return fmt.Errorf("transport is not TCPTransport")
+	}
 
 	for _, peer := range s.peers {
-		peer.Send([]byte{p2p.IncomingMessage})
-		if err := peer.Send(buf.Bytes()); err != nil {
+		if err := tcpTransport.SendRPC(peer, rpc); err != nil {
 			log.Printf("Failed to send message to peer %s: %v", peer.RemoteAddr().String(), err)
 			return err
 		}
@@ -620,8 +631,17 @@ func (s *FileServer) handleMessageStorageFile(from string, msg MessageStoreFile)
 		return err
 	}
 
-	peer.Send([]byte{p2p.IncomingMessage})
-	return peer.Send(buf.Bytes())
+	rpc := &p2p.RPC{
+		Payload: buf.Bytes(),
+		Stream:  false,
+	}
+
+	tcpTransport, ok := s.Ops.Transport.(*p2p.TCPTransport)
+	if !ok {
+		return fmt.Errorf("transport is not TCPTransport")
+	}
+
+	return tcpTransport.SendRPC(peer, rpc)
 }
 
 func (s *FileServer) handleMessageDeleteFile(from string, msg MessageDeleteFile) error {
@@ -722,12 +742,20 @@ func (s *FileServer) handleMessageListFile(from string, msg MessageListFiles) er
 	peer, ok := s.peers[from]
 	s.peerLock.Unlock()
 	if ok {
-		peer.Send([]byte{p2p.IncomingMessage})
 		buf := new(bytes.Buffer)
 		if err := gob.NewEncoder(buf).Encode(&resp); err != nil {
 			return fmt.Errorf("failed to encode response: %v", err)
 		}
-		peer.Send(buf.Bytes())
+
+		rpc := &p2p.RPC{
+			Payload: buf.Bytes(),
+			Stream:  false,
+		}
+
+		tcpTransport, ok := s.Ops.Transport.(*p2p.TCPTransport)
+		if ok {
+			tcpTransport.SendRPC(peer, rpc)
+		}
 	}
 	return nil
 }
@@ -781,8 +809,17 @@ func (s *FileServer) handleMessageRequestFile(from string, msg MessageRequestFil
 		return err
 	}
 
-	peer.Send([]byte{p2p.IncomingMessage})
-	err = peer.Send(buf.Bytes())
+	rpc := &p2p.RPC{
+		Payload: buf.Bytes(),
+		Stream:  false,
+	}
+
+	tcpTransport, ok := s.Ops.Transport.(*p2p.TCPTransport)
+	if !ok {
+		return fmt.Errorf("transport is not TCPTransport")
+	}
+
+	err = tcpTransport.SendRPC(peer, rpc)
 	if err == nil {
 		fmt.Printf("Sent %d bytes of %s to requesting peer %s\n", len(data), msg.Key, from)
 	}
