@@ -148,7 +148,7 @@ func main() {
 
 	s3.DeleteFolderFromServer(key, s3.Ops.ID)
 
-	err := s2.GetFolder(key, "./downloaded_p2p")
+	err := s3.GetFolder(key, "./downloaded_p2p")
 	if err != nil {
 		fmt.Printf("Failed to read from store: %v", err)
 		return

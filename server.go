@@ -376,6 +376,15 @@ func (s *FileServer) GetFolder(baseKey, destPath string) error {
 			return fmt.Errorf("failed to write file %s: %w", fullPath, err)
 		}
 
+		// Store the file in the server's store if not already present
+		if !s.store.Has(s.Ops.ID, key) {
+			file, err := os.Open(fullPath)
+			if err == nil {
+				s.store.writeDecrypt(s.Ops.EncKey, s.Ops.ID, key, file)
+				file.Close()
+			}
+		}
+
 		fmt.Printf("✅ Retrieved file %s → %s\n", key, fullPath)
 	}
 
