@@ -324,12 +324,19 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 }
 
 func (s *FileServer) GetFolder(baseKey, destPath string) error {
-	// 1️⃣ Try listing locally
+	// 1️⃣ Try listing locally and check which files actually exist
 	keys := s.store.ListKeysByPrefix(baseKey)
+	missingKeys := []string{}
 
-	// 2️⃣ If local files missing, ask peers for the list
-	if len(keys) == 0 {
-		fmt.Printf("⚠️ No local files for prefix %s — requesting from peers...\n", baseKey)
+	for _, key := range keys {
+		if !s.store.Has(s.Ops.ID, key) {
+			missingKeys = append(missingKeys, key)
+		}
+	}
+
+	// 2️⃣ If no keys found or some files missing, ask peers
+	if len(keys) == 0 || len(missingKeys) > 0 {
+		fmt.Printf("⚠️ Missing files for prefix %s — requesting from peers...\n", baseKey)
 
 		msg := Message{
 			Payload: MessageListFiles{
@@ -342,8 +349,23 @@ func (s *FileServer) GetFolder(baseKey, destPath string) error {
 			return fmt.Errorf("failed to broadcast ListFiles: %v", err)
 		}
 
-		// Wait for peers to respond (implement MessageListFilesResponse handler)
-		keys = s.awaitKeysFromPeers(baseKey)
+		// Wait for peers to respond
+		peerKeys := s.awaitKeysFromPeers(baseKey)
+
+		// Merge peer keys with local keys
+		keySet := make(map[string]bool)
+		for _, key := range keys {
+			keySet[key] = true
+		}
+		for _, key := range peerKeys {
+			keySet[key] = true
+		}
+
+		keys = make([]string, 0, len(keySet))
+		for key := range keySet {
+			keys = append(keys, key)
+		}
+
 		if len(keys) == 0 {
 			return fmt.Errorf("no files found with prefix %s (local or remote)", baseKey)
 		}
