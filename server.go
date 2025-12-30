@@ -71,6 +71,8 @@ func newFileServer(ops FileServerOpts) *FileServer {
 		ops.ID = generateId()
 	}
 
+	fmt.Printf("🆔 Created FileServer with ID: %s (StorageRoot: %s)\n", ops.ID, ops.StorageRoot)
+
 	s := &FileServer{
 		Ops:            ops,
 		store:          store,
@@ -949,12 +951,14 @@ func (s *FileServer) handleMessageRequestFile(from string, msg MessageRequestFil
 }
 func (s *FileServer) handleMessageFileData(from string, msg MessageFileData) error {
 	// Store the received file data using receiver's own ID
+	fmt.Printf("💾 STORING FILE: key=%s, msg.ID=%s, s.Ops.ID=%s\n", msg.Key, msg.ID, s.Ops.ID)
+
 	n, err := s.store.WriteEncrypt(s.Ops.EncKey, s.Ops.ID, msg.Key, bytes.NewReader(msg.Data))
 	if err != nil {
 		return fmt.Errorf("failed to store file %s: %v", msg.Key, err)
 	}
 
-	fmt.Printf("Received and stored %d bytes for key %s from peer %s\n", n, msg.Key, from)
+	fmt.Printf("Received and stored %d bytes for key %s from peer %s (stored with ID: %s)\n", n, msg.Key, from, s.Ops.ID)
 	return nil
 }
 
@@ -980,11 +984,17 @@ func (s *FileServer) handleMessageDeleteFromServer(from string, msg MessageDelet
 }
 
 func (s *FileServer) handleMessageDeleteFolderFromServer(from string, msg MessageDeleteFolderFromServer) error {
+	fmt.Printf("🗑️  DELETE REQUEST: TargetID=%s, MyID=%s, Match=%v (from %s)\n",
+		msg.TargetID, s.Ops.ID, msg.TargetID == s.Ops.ID, from)
+
 	// Check if this server is the target
 	if msg.TargetID != s.Ops.ID {
 		// Not for this server, ignore
+		fmt.Printf("⏭️  Ignoring delete request (not for this server)\n")
 		return nil
 	}
+
+	fmt.Printf("✅ Processing delete request (this server is the target)\n")
 
 	keys := s.store.ListKeysByPrefix(msg.BaseKey)
 	if len(keys) == 0 {
