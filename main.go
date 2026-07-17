@@ -142,13 +142,19 @@ func main() {
 	//}
 	//time.Sleep(1 * time.Second)
 
-	s3.StoreFolder(key, "./p2p")
+	err := s3.StoreFolder(key, "./p2p")
+	if err != nil {
+		return
+	}
 
 	time.Sleep(1 * time.Second)
 
-	s3.DeleteFolderFromServer(key, s3.Ops.ID)
+	err = s3.DeleteFolderFromServer(key, s3.Ops.ID)
+	if err != nil {
+		return
+	}
 
-	err := s3.GetFolder(key, "./downloaded_p2p")
+	err = s3.GetFolder(key, "./downloaded_p2p")
 	if err != nil {
 		fmt.Printf("Failed to read from store: %v", err)
 		return

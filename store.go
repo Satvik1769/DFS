@@ -129,6 +129,10 @@ func (s *Store) Delete(id string, key string) error {
 		return err
 	}
 	var FirstPathNameWithRoot = s.Root + "/" + id + "/" + pathKey.FirstPathName()
+
+	// Remove the key from the in-memory registry to sync with disk deletion
+	delete(s.keys, key)
+
 	return os.RemoveAll(FirstPathNameWithRoot)
 }
 
@@ -140,8 +144,15 @@ func (s *Store) Has(id, key string) bool {
 	if s.keys == nil {
 		return false
 	}
-	_, ok := s.keys[key]
-	return ok
+	actualPath, ok := s.keys[key]
+	if !ok {
+		return false
+	}
+
+	// Verify file actually exists on disk, not just in memory
+	fullPathWithRoot := filepath.Join(s.Root, id, actualPath)
+	_, err := os.Stat(fullPathWithRoot)
+	return err == nil
 }
 
 func (s *Store) Write(id string, key string, r io.Reader) (int64, error) {
